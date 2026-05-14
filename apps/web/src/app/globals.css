@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  --background: #05060b;
+  --foreground: #e8edf7;
+  --go-bg: #05060b;
+  --go-shell: #0d1017;
+  --go-panel: #151925;
+  --go-ink: #0d1017;
+  --go-copy: #e8edf7;
+  --go-copy-soft: #a7b0c4;
+  --go-muted: #66718a;
+  --go-border: #2a3245;
+  --go-border-strong: #3e4861;
+  --go-lilac: #ddb7ff;
+  --go-cyan: #77ddff;
+  --go-success: #8df0aa;
+  --go-amber: #ffd68a;
+  --go-danger: #ff9bb8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-mono);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--go-border-strong) var(--go-shell);
+}
+
+html {
+  background: var(--go-bg);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono), monospace;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--go-lilac) 72%, transparent);
+  color: var(--go-ink);
+}
+
+.font-display {
+  font-family: var(--font-display), sans-serif;
+}
+
+@keyframes boot {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

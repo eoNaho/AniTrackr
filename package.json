@@ -1,0 +1,16 @@
+{
+  "name": "goanime-trackear",
+  "private": true,
+  "packageManager": "bun@1.3.12",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter @goanime-trackear/web dev",
+    "dev:web": "bun run --filter @goanime-trackear/web dev",
+    "dev:backend": "bun run --filter @goanime-trackear/backend dev",
+    "build": "bun run --filter @goanime-trackear/web build",
+    "start": "bun run --filter @goanime-trackear/backend start",
+    "lint": "bun run --filter @goanime-trackear/web lint"
+  }
+}
