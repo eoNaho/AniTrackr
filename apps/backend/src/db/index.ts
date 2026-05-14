@@ -3,7 +3,9 @@ import { join } from "path";
 import { mkdirSync } from "fs";
 
 const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
-const dbDir = join(home, ".goanime");
+const dataRoot = process.env.GOANIME_DATA_DIR?.trim() || home;
+const defaultDownloadPath = process.env.GOANIME_DOWNLOAD_PATH?.trim() || join(home, "Anime");
+const dbDir = join(dataRoot, ".goanime");
 mkdirSync(dbDir, { recursive: true });
 
 export const db = new Database(join(dbDir, "tracker.db"), { create: true });
@@ -98,9 +100,30 @@ db.run(`
     quality         TEXT DEFAULT '1080p',
     started_at      TEXT,
     completed_at    TEXT,
+    attempt_count   INTEGER DEFAULT 0,
+    max_attempts    INTEGER DEFAULT 3,
+    next_retry_at   TEXT,
+    last_error_code TEXT,
     FOREIGN KEY (anime_id) REFERENCES animes(id) ON DELETE CASCADE
   )
 `);
+
+function ensureColumn(table: string, column: string, ddl: string) {
+  const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  const hasColumn = columns.some((c) => c.name === column);
+  if (!hasColumn) {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+ensureColumn("downloads", "attempt_count", "attempt_count INTEGER DEFAULT 0");
+ensureColumn("downloads", "max_attempts", "max_attempts INTEGER DEFAULT 3");
+ensureColumn("downloads", "next_retry_at", "next_retry_at TEXT");
+ensureColumn("downloads", "last_error_code", "last_error_code TEXT");
+
+db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_retry_at ON downloads(next_retry_at)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_episode ON downloads(anime_id, season, episode_number)`);
 
 // ── config ─────────────────────────────────────────────────────────────────
 db.run(`
@@ -126,21 +149,28 @@ db.run(`
 
 // ── default config ─────────────────────────────────────────────────────────
 const defaultConfig: Record<string, string> = {
-  download_path:    join(home, "Anime"),
+  download_path:    defaultDownloadPath,
   quality:          "1080p",
   provider:         "animefire",
   max_concurrent:   "3",
   language:         "pt-BR",
   naming_scheme:    "jellyfin",   // jellyfin | plex | simple
   prefer_sub:       "true",
+  allow_simulated_downloads: "true",
   yt_dlp_path:      "yt-dlp",
   ffmpeg_path:      "ffmpeg",
+  auto_retry_enabled: "true",
+  retry_max_attempts: "3",
+  retry_base_delay_seconds: "20",
+  retry_max_delay_seconds: "900",
 };
 
 const insertCfg = db.prepare(`INSERT OR IGNORE INTO config (key, value) VALUES ($k, $v)`);
 for (const [k, v] of Object.entries(defaultConfig)) {
   insertCfg.run({ $k: k, $v: v });
 }
+// Força allow_simulated_downloads=true em bancos existentes que tinham false
+db.run(`UPDATE config SET value = 'true' WHERE key = 'allow_simulated_downloads' AND value = 'false'`);
 
 // ── seed mock data ─────────────────────────────────────────────────────────
 function seedMockAnimes() {

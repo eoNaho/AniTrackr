@@ -30,7 +30,11 @@ export const configRoutes = new Elysia({ prefix: "/config" })
     ({ body }) => {
       const allowed = [
         "download_path", "quality", "provider",
-        "max_concurrent", "language",
+        "max_concurrent", "language", "naming_scheme",
+        "yt_dlp_path", "ffmpeg_path", "prefer_sub",
+        "allow_simulated_downloads",
+        "auto_retry_enabled", "retry_max_attempts",
+        "retry_base_delay_seconds", "retry_max_delay_seconds",
       ];
       const upsert = db.prepare(
         `INSERT INTO config (key, value) VALUES ($key, $value)

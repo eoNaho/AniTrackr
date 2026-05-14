@@ -6,11 +6,17 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "bun run --filter @goanime-trackear/web dev",
+    "dev": "concurrently -k -n web,backend -c cyan,green \"bun run dev:web\" \"bun run dev:backend\"",
     "dev:web": "bun run --filter @goanime-trackear/web dev",
     "dev:backend": "bun run --filter @goanime-trackear/backend dev",
     "build": "bun run --filter @goanime-trackear/web build",
     "start": "bun run --filter @goanime-trackear/backend start",
-    "lint": "bun run --filter @goanime-trackear/web lint"
+    "lint": "bun run --filter @goanime-trackear/web lint",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f --tail=150"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

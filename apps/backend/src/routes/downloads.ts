@@ -5,82 +5,116 @@ import {
   cancelDownload,
   getQueueStats,
   getActiveCount,
+  retryDownload,
+  retryFailedDownloads,
+  getDownloaderHealth,
 } from "../services/downloader.ts";
 import db from "../db/index.ts";
 import { getMissingEpisodes } from "../services/scanner.ts";
+import { getEpisodesWithFallback, type Provider } from "../services/provider-chain.ts";
 import { logger } from "../utils/logger.ts";
 
-// ── SSE broadcast store ────────────────────────────────────────────────────
-type SSEClient = { send: (data: string) => void; close: () => void };
+type SSEClient = { send: (event: string, payload: unknown) => void; close: () => void };
 const sseClients = new Set<SSEClient>();
 
-export function broadcastDownloadUpdate(payload: unknown) {
-  const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const client of sseClients) {
-    try { client.send(msg); } catch { sseClients.delete(client); }
+function toSseEvent(event: string, payload: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+function removeClient(client: SSEClient) {
+  sseClients.delete(client);
+  try {
+    client.close();
+  } catch {
+    // noop
   }
 }
 
-// Tick de broadcast automático a cada 1s enquanto houver downloads ativos
+export function broadcastDownloadUpdate(payload: unknown) {
+  for (const client of sseClients) {
+    try {
+      client.send("downloads", payload);
+    } catch {
+      removeClient(client);
+    }
+  }
+}
+
 setInterval(() => {
   if (sseClients.size === 0) return;
   const active = getActiveCount();
   if (active === 0) return;
-  const jobs = getAllDownloads().filter((j) => j.status === "downloading" || j.status === "queued");
+  const jobs = getAllDownloads().filter((j) => j.status === "downloading" || j.status === "queued" || j.status === "retry_wait");
   broadcastDownloadUpdate({ type: "progress", jobs, activeCount: active, ts: Date.now() });
 }, 1_000);
 
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  for (const client of sseClients) {
+    try {
+      client.send("ping", { type: "ping", ts: Date.now() });
+    } catch {
+      removeClient(client);
+    }
+  }
+}, 15_000);
+
 export const downloadRoutes = new Elysia()
-
-  // ── SSE: GET /api/downloads/stream ────────────────────────────────────────
-  .get("/downloads/stream", ({ set }) => {
-    set.headers["Content-Type"] = "text/event-stream";
-    set.headers["Cache-Control"] = "no-cache";
-    set.headers["Connection"] = "keep-alive";
-    set.headers["Access-Control-Allow-Origin"] = "*";
-
+  .get("/downloads/stream", () => {
     let closed = false;
-    let controller: ReadableStreamDefaultController<string> | null = null;
+    let cleanupRef: (() => void) | null = null;
 
     const stream = new ReadableStream<string>({
       start(ctrl) {
-        controller = ctrl;
         const client: SSEClient = {
-          send: (data) => { if (!closed) ctrl.enqueue(data); },
-          close: () => { closed = true; try { ctrl.close(); } catch {} },
+          send: (event, payload) => {
+            if (closed) return;
+            ctrl.enqueue(toSseEvent(event, payload));
+          },
+          close: () => {
+            if (closed) return;
+            closed = true;
+            try {
+              ctrl.close();
+            } catch {
+              // noop
+            }
+          },
         };
-        sseClients.add(client);
-        logger.debug("sse", `client connected (total: ${sseClients.size})`);
 
-        // Hello event
-        ctrl.enqueue(`data: ${JSON.stringify({ type: "connected", ts: Date.now() })}\n\n`);
-        // Estado inicial
-        ctrl.enqueue(`data: ${JSON.stringify({ type: "snapshot", jobs: getAllDownloads(), ts: Date.now() })}\n\n`);
-
-        // Limpeza automática quando conexão fecha (Bun detecta pelo abort)
-        const cleanup = () => {
+        cleanupRef = () => {
+          if (closed) return;
           closed = true;
           sseClients.delete(client);
           logger.debug("sse", `client disconnected (total: ${sseClients.size})`);
+          try {
+            ctrl.close();
+          } catch {
+            // noop
+          }
         };
-        setTimeout(cleanup, 30 * 60 * 1000); // timeout máximo 30min
+
+        sseClients.add(client);
+        logger.debug("sse", `client connected (total: ${sseClients.size})`);
+
+        client.send("connected", { type: "connected", ts: Date.now() });
+        client.send("snapshot", { type: "snapshot", jobs: getAllDownloads(), ts: Date.now() });
       },
       cancel() {
-        closed = true;
+        if (cleanupRef) cleanupRef();
       },
     });
 
-    return new Response(stream as unknown as BodyInit, {
+    return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
         "Access-Control-Allow-Origin": "*",
       },
     });
   })
 
-  // ── GET /api/downloads ─────────────────────────────────────────────────────
   .get("/downloads", ({ query }) => {
     const status = query.status;
     let jobs = getAllDownloads();
@@ -90,12 +124,16 @@ export const downloadRoutes = new Elysia()
     query: t.Object({ status: t.Optional(t.String()) }),
   })
 
-  // ── GET /api/downloads/stats ──────────────────────────────────────────────
   .get("/downloads/stats", () => {
     const stats = getQueueStats();
     const recentCompleted = db.query<{
-      id: string; anime_id: string; episode_number: number; status: string;
-      completed_at: string | null; file_path: string;
+      id: string;
+      anime_id: string;
+      episode_number: number;
+      status: string;
+      completed_at: string | null;
+      file_path: string;
+      anime_title: string;
     }, []>(
       `SELECT d.id, d.anime_id, d.episode_number, d.status, d.completed_at, d.file_path,
               a.title as anime_title
@@ -106,16 +144,35 @@ export const downloadRoutes = new Elysia()
     return { ...stats, recentCompleted };
   })
 
-  // ── POST /api/queue ───────────────────────────────────────────────────────
+  .get("/downloads/health", () => getDownloaderHealth())
+
+  .post("/downloads/:id/retry", ({ params }) => {
+    const ok = retryDownload(params.id);
+    if (!ok) return { error: "Job nao encontrado para retry (status permitido: failed/cancelled/retry_wait)" };
+    broadcastDownloadUpdate({ type: "retried", jobId: params.id, ts: Date.now() });
+    logger.info("queue", `manual retry ${params.id}`);
+    return { ok: true };
+  }, { params: t.Object({ id: t.String() }) })
+
+  .post("/downloads/retry-failed", ({ body }) => {
+    const limit = Math.max(1, Math.min(200, body?.limit ?? 25));
+    const result = retryFailedDownloads(limit);
+    broadcastDownloadUpdate({ type: "retry-batch", ...result, ts: Date.now() });
+    logger.info("queue", `retry-failed requested=${result.requested} retried=${result.retried}`);
+    return { ok: true, ...result };
+  }, {
+    body: t.Optional(t.Object({ limit: t.Optional(t.Number()) })),
+  })
+
   .post("/queue", ({ body }) => {
     const { animeId, episodes, season, sourceUrl } = body;
     if (!animeId || !episodes?.length) {
-      return { error: "animeId e episodes[] são obrigatórios" };
+      return { error: "animeId e episodes[] sao obrigatorios" };
     }
     const anime = db.query<{ id: string; title: string }, [string]>(
       `SELECT id, title FROM animes WHERE id = ?`
     ).get(animeId);
-    if (!anime) return { error: `Anime "${animeId}" não encontrado` };
+    if (!anime) return { error: `Anime "${animeId}" nao encontrado` };
 
     const jobs = enqueueDownloads(animeId, episodes, season ?? 1, sourceUrl ?? undefined);
     broadcastDownloadUpdate({ type: "enqueued", animeId, count: jobs.length, ts: Date.now() });
@@ -130,16 +187,41 @@ export const downloadRoutes = new Elysia()
     }),
   })
 
-  // ── POST /api/queue/missing — baixa eps faltando de UM anime ─────────────
-  .post("/queue/missing", ({ body }) => {
+  .post("/queue/missing", async ({ body }) => {
     const { animeId, season } = body;
     const missing = getMissingEpisodes(animeId);
-    if (!missing.length) return { ok: true, message: "Nenhum episódio faltando", queued: 0 };
+    if (!missing.length) return { ok: true, message: "Nenhum episodio faltando", queued: 0 };
 
-    const jobs = enqueueDownloads(animeId, missing, season ?? 1);
-    broadcastDownloadUpdate({ type: "enqueued", animeId, count: jobs.length, missing, ts: Date.now() });
-    logger.info("queue", `queued ${missing.length} missing eps for ${animeId}`);
-    return { ok: true, queued: jobs.length, missingEpisodes: missing };
+    const anime = db.query<{ id: string; provider: string; source_url: string | null }, [string]>(
+      `SELECT id, provider, source_url FROM animes WHERE id = ?`
+    ).get(animeId);
+    if (!anime) return { error: "Anime nao encontrado" };
+
+    const episodeUrlByNumber = new Map<number, string>();
+    if (anime.source_url) {
+      try {
+        const eps = await getEpisodesWithFallback(
+          anime.source_url,
+          (anime.provider as Provider) ?? "animefire"
+        );
+        for (const ep of eps) {
+          episodeUrlByNumber.set(ep.number, ep.url);
+        }
+      } catch (err) {
+        logger.warn("queue", `missing-url-resolve failed for ${animeId}: ${String(err)}`);
+      }
+    }
+
+    let totalQueued = 0;
+    for (const epNumber of missing) {
+      const sourceUrl = episodeUrlByNumber.get(epNumber) ?? anime.source_url ?? undefined;
+      const jobs = enqueueDownloads(animeId, [epNumber], season ?? 1, sourceUrl);
+      totalQueued += jobs.length;
+    }
+
+    broadcastDownloadUpdate({ type: "enqueued", animeId, count: totalQueued, missing, ts: Date.now() });
+    logger.info("queue", `queued ${totalQueued} missing eps for ${animeId}`);
+    return { ok: true, queued: totalQueued, missingEpisodes: missing };
   }, {
     body: t.Object({
       animeId: t.String(),
@@ -147,16 +229,21 @@ export const downloadRoutes = new Elysia()
     }),
   })
 
-  // ── POST /api/queue/missing-all — baixa eps faltando de TODOS os animes ──
-  .post("/queue/missing-all", ({ body }) => {
+  .post("/queue/missing-all", async ({ body }) => {
     const { statusFilter } = (body as { statusFilter?: string }) ?? {};
-    let query = `SELECT id, title, season_number FROM animes WHERE is_tracked = 1`;
+    let query = `SELECT id, title, season_number, provider, source_url FROM animes WHERE is_tracked = 1`;
     const params: string[] = [];
     if (statusFilter) {
       query += ` AND download_status = ?`;
       params.push(statusFilter);
     }
-    const animes = db.query<{ id: string; title: string; season_number: number }, string[]>(query).all(...params);
+    const animes = db.query<{
+      id: string;
+      title: string;
+      season_number: number;
+      provider: string;
+      source_url: string | null;
+    }, string[]>(query).all(...params);
 
     const queued: { animeId: string; title: string; count: number }[] = [];
     let totalQueued = 0;
@@ -164,9 +251,32 @@ export const downloadRoutes = new Elysia()
     for (const anime of animes) {
       const missing = getMissingEpisodes(anime.id);
       if (!missing.length) continue;
-      enqueueDownloads(anime.id, missing, anime.season_number);
-      queued.push({ animeId: anime.id, title: anime.title, count: missing.length });
-      totalQueued += missing.length;
+
+      const episodeUrlByNumber = new Map<number, string>();
+      if (anime.source_url) {
+        try {
+          const eps = await getEpisodesWithFallback(
+            anime.source_url,
+            (anime.provider as Provider) ?? "animefire"
+          );
+          for (const ep of eps) {
+            episodeUrlByNumber.set(ep.number, ep.url);
+          }
+        } catch (err) {
+          logger.warn("queue", `missing-all url resolve failed for ${anime.id}: ${String(err)}`);
+        }
+      }
+
+      let animeQueued = 0;
+      for (const epNumber of missing) {
+        const sourceUrl = episodeUrlByNumber.get(epNumber) ?? anime.source_url ?? undefined;
+        const jobs = enqueueDownloads(anime.id, [epNumber], anime.season_number, sourceUrl);
+        animeQueued += jobs.length;
+      }
+
+      if (!animeQueued) continue;
+      queued.push({ animeId: anime.id, title: anime.title, count: animeQueued });
+      totalQueued += animeQueued;
     }
 
     broadcastDownloadUpdate({ type: "batch-enqueued", totalQueued, ts: Date.now() });
@@ -174,23 +284,21 @@ export const downloadRoutes = new Elysia()
     return { ok: true, totalQueued, animes: queued };
   })
 
-  // ── DELETE /api/downloads/:id ─────────────────────────────────────────────
   .delete("/downloads/:id", ({ params }) => {
     const cancelled = cancelDownload(params.id);
-    if (!cancelled) return { error: "Job não encontrado ou já finalizado" };
+    if (!cancelled) return { error: "Job nao encontrado ou ja finalizado" };
     broadcastDownloadUpdate({ type: "cancelled", jobId: params.id, ts: Date.now() });
     logger.info("queue", `cancelled job ${params.id}`);
     return { ok: true };
   }, { params: t.Object({ id: t.String() }) })
 
-  // ── DELETE /api/downloads/all — cancela tudo na fila ─────────────────────
   .delete("/downloads/all", () => {
     const queued = db.query<{ id: string }, []>(
-      `SELECT id FROM downloads WHERE status IN ('queued','downloading')`
+      `SELECT id FROM downloads WHERE status IN ('queued','downloading','retry_wait')`
     ).all();
     let cancelled = 0;
     for (const { id } of queued) {
-      if (cancelDownload(id)) cancelled++;
+      if (cancelDownload(id)) cancelled += 1;
     }
     logger.info("queue", `cancelled all: ${cancelled} jobs`);
     return { ok: true, cancelled };
