@@ -4,13 +4,6 @@
 
 Busca em múltiplos providers PT-BR e EN, baixa via yt-dlp ou qBittorrent + Nyaa.si, rastreia episódios locais, enriquece metadados com AniList/Kitsu/MAL (Jikan), e agenda downloads automáticos para séries em lançamento — tudo em uma interface de terminal com scanlines.
 
-```
-╔══════════════════════════════════════════════════╗
-║  AniTrackr — ANITRACKR-DOWNLOAD-TRACKER_     ║
-║  [LIBRARY] [SEARCH] [⚙ CONFIG]                  ║
-╚══════════════════════════════════════════════════╝
-```
-
 ---
 
 ## Índice
