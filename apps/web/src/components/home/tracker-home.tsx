@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearQueueMonitor,
   cancelAllDownloads,
@@ -104,6 +104,8 @@ export function TrackerHome() {
   const [selectedEpisodes, setSelectedEpisodes] = useState<number[]>([]);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [isLoadingMeta, setIsLoadingMeta] = useState(false);
+
+  const selectVersionRef = useRef(0);
 
   const pushLog = useCallback((module: string, text: string) => {
     setLogs((cur) => [
@@ -236,10 +238,11 @@ export function TrackerHome() {
   );
 
   useEffect(() => {
-    if (!hasActiveDownloads) return;
+    // SSE já entrega eventos de progresso em tempo real; polling só faz sentido no fallback
+    if (!hasActiveDownloads || streamState === "live") return;
     const timer = setInterval(() => {
       void refreshDownloads();
-    }, streamState === "live" ? 5000 : 2000);
+    }, 2000);
     return () => clearInterval(timer);
   }, [hasActiveDownloads, refreshDownloads, streamState]);
 
@@ -466,6 +469,9 @@ export function TrackerHome() {
   }
 
   async function handleSelectResult(result: SearchResult) {
+    selectVersionRef.current += 1;
+    const version = selectVersionRef.current;
+
     setSelectedResult(result);
     setEpisodes([]);
     setSelectedEpisodes([]);
@@ -475,6 +481,7 @@ export function TrackerHome() {
 
     fetchMetadataSearch(result.title, "kitsu")
       .then((res) => {
+        if (selectVersionRef.current !== version) return;
         if (res.results?.length) {
           setKitsuMeta(res.results[0]);
           pushLog("meta", `kitsu: ${res.results[0].title}`);
@@ -482,18 +489,19 @@ export function TrackerHome() {
           pushLog("meta", "kitsu: sem resultado");
         }
       })
-      .catch(() => pushLog("meta", "kitsu: falha"))
-      .finally(() => setIsLoadingMeta(false));
+      .catch(() => { if (selectVersionRef.current === version) pushLog("meta", "kitsu: falha"); })
+      .finally(() => { if (selectVersionRef.current === version) setIsLoadingMeta(false); });
 
     searchEpisodes({ provider: result.provider ?? searchSource, url: result.url, allAnimeId: result.allAnimeId ?? result.id })
       .then((res) => {
+        if (selectVersionRef.current !== version) return;
         const eps = res.episodes ?? [];
         setEpisodes(eps);
         setSelectedEpisodes(eps.slice(0, 1).map((e) => e.number));
         pushLog("search", `${result.title}: ${res.total} eps`);
       })
-      .catch((e) => pushLog("search", `eps erro: ${(e as Error).message}`))
-      .finally(() => setIsLoadingEpisodes(false));
+      .catch((e) => { if (selectVersionRef.current === version) pushLog("search", `eps erro: ${(e as Error).message}`); })
+      .finally(() => { if (selectVersionRef.current === version) setIsLoadingEpisodes(false); });
   }
 
   async function handleQueueSelected() {
@@ -502,6 +510,21 @@ export function TrackerHome() {
     try {
       const selectedSorted = [...selectedEpisodes].sort((a, b) => a - b);
       const episodeUrlByNumber = new Map(episodes.map((ep) => [ep.number, ep.url]));
+
+      // Agrupa episódios por URL para minimizar chamadas à API e
+      // valida antes de criar o registro na biblioteca
+      const urlGroups = new Map<string, number[]>();
+      for (const epNumber of selectedSorted) {
+        const sourceUrl = episodeUrlByNumber.get(epNumber) ?? selectedResult.url ?? "";
+        if (!sourceUrl) continue;
+        const group = urlGroups.get(sourceUrl) ?? [];
+        group.push(epNumber);
+        urlGroups.set(sourceUrl, group);
+      }
+
+      if (urlGroups.size === 0) {
+        throw new Error("Nenhum episódio com URL válida para enfileirar.");
+      }
 
       const lib = await createLibraryAnime({
         title: selectedResult.title,
@@ -517,23 +540,9 @@ export function TrackerHome() {
       });
 
       let queuedCount = 0;
-      for (const epNumber of selectedSorted) {
-        const episodeSourceUrl = episodeUrlByNumber.get(epNumber) ?? selectedResult.url;
-        if (!episodeSourceUrl) {
-          pushLog("queue", `ep ${epNumber}: sem URL de source`);
-          continue;
-        }
-
-        await enqueueEpisodes({
-          animeId: lib.id,
-          episodes: [epNumber],
-          sourceUrl: episodeSourceUrl,
-        });
-        queuedCount += 1;
-      }
-
-      if (queuedCount === 0) {
-        throw new Error("Nenhum episodio foi enfileirado (URLs invalidas).");
+      for (const [sourceUrl, eps] of urlGroups) {
+        await enqueueEpisodes({ animeId: lib.id, episodes: eps, sourceUrl });
+        queuedCount += eps.length;
       }
 
       pushLog("queue", `${selectedResult.title}: ${queuedCount} eps enfileirados`);
@@ -621,7 +630,7 @@ export function TrackerHome() {
 
         <div className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-[#45475a] pb-2 text-[11px] text-[#6c7086]">
           {logs.slice(-2).map((log, i) => (
-            <span key={i} className="truncate boot">
+            <span key={`${log.time}-${log.module}-${i}`} className="truncate boot">
               <span className="text-[#89dceb]">{log.time}</span>{" "}
               <span className="text-[#f9e2af]">[{log.module}]</span>{" "}
               {log.text}

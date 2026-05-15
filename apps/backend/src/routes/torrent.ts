@@ -22,8 +22,11 @@ function getConfig(key: string): string {
 // Monitora torrents ativos e atualiza a tabela downloads
 const monitoredHashes = new Map<string, { jobId: string; animeId: string; episode: number; season: number }>();
 
+let _monitorInterval: ReturnType<typeof setInterval> | null = null;
+
 export function startTorrentMonitor() {
-  setInterval(async () => {
+  if (_monitorInterval) clearInterval(_monitorInterval);
+  _monitorInterval = setInterval(async () => {
     if (!monitoredHashes.size) return;
     const hashes = [...monitoredHashes.keys()];
     const torrents = await qbtGetTorrents(hashes).catch(() => []);
@@ -199,6 +202,19 @@ export const torrentRoutes = new Elysia()
       return new Response(JSON.stringify({ error: "magnetLink ou torrentUrl são obrigatórios" }), { status: 422 });
     }
 
+    if (magnetLink && !magnetLink.startsWith("magnet:?")) {
+      return new Response(JSON.stringify({ error: "magnetLink inválido — deve começar com magnet:?" }), { status: 422 });
+    }
+    if (torrentUrl) {
+      try {
+        const u = new URL(torrentUrl);
+        if (!["http:", "https:"].includes(u.protocol))
+          return new Response(JSON.stringify({ error: "torrentUrl deve usar protocolo http ou https" }), { status: 422 });
+      } catch {
+        return new Response(JSON.stringify({ error: "torrentUrl inválida" }), { status: 422 });
+      }
+    }
+
     const enabled = await qbtIsEnabled();
     if (!enabled) {
       return new Response(JSON.stringify({ error: "qBittorrent não está habilitado. Ative em config: qbittorrent_enabled=true" }), { status: 400 });
@@ -279,6 +295,12 @@ export const torrentRoutes = new Elysia()
   })
 
   .post("/providers/:name/reset", ({ params }) => {
+    const VALID_PROVIDERS = new Set([
+      "animefire", "goyabu", "allanime", "nineanime",
+      "animedrive", "superflix", "dattebayo", "nyaa",
+    ]);
+    if (!VALID_PROVIDERS.has(params.name))
+      return new Response(JSON.stringify({ error: "Provider inválido" }), { status: 400 });
     resetProvider(params.name);
     return { ok: true, message: `Circuit breaker de '${params.name}' resetado` };
   });

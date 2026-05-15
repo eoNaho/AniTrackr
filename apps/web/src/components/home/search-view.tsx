@@ -115,7 +115,7 @@ export function SearchView({
             ) : (
               results.map((r, i) => (
                 <button
-                  key={`${r.title}-${i}`}
+                  key={r.url ?? r.id ?? `${r.title}-${i}`}
                   onClick={() => onSelectResult(r)}
                   className={`w-full border-b border-[#232330] px-3 py-2 text-left hover:bg-white/5 ${
                     selectedResult?.title === r.title

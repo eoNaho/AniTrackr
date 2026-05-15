@@ -51,7 +51,19 @@ const PAGE_TOKEN_RE = /var PAGE_TOKEN\s*=\s*"([^"]+)"/;
 const CONTENT_ID_RE = /var INITIAL_CONTENT_ID\s*=\s*(\d+)/;
 const CONTENT_TYPE_RE = /var CONTENT_TYPE\s*=\s*"([^"]+)"/;
 const TITLE_RE = /<title>(?:Player \| )?(.+?)<\/title>/;
-const ALL_EPISODES_RE = /var ALL_EPISODES\s*=\s*(\{.+?\});/s;
+// Extrai objeto JSON balanceando chaves — evita regex com flag `s` que para no primeiro `};`
+function extractJsonObject(html: string, varName: string): string | null {
+  const idx = html.indexOf(`var ${varName}`);
+  if (idx === -1) return null;
+  const start = html.indexOf("{", idx);
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < html.length; i++) {
+    if (html[i] === "{") depth++;
+    else if (html[i] === "}") { depth--; if (depth === 0) return html.slice(start, i + 1); }
+  }
+  return null;
+}
 const SUBTITLE_RE = /var playerjsSubtitle\s*=\s*"(.+?)";/;
 const SUB_PART_RE = /\[(.+?)\](https?:\/\/.+)/;
 
@@ -200,10 +212,10 @@ function extractSubtitles(html: string): { lang: string; url: string }[] {
 }
 
 export function extractSuperFlixEpisodes(html: string): Record<string, SuperFlixEpisode[]> {
-  const m = ALL_EPISODES_RE.exec(html);
-  if (!m) return {};
+  const raw_json = extractJsonObject(html, "ALL_EPISODES");
+  if (!raw_json) return {};
   try {
-    const raw = JSON.parse(m[1]) as Record<string, { epi_num: string | number; title: string; air_date: string }[]>;
+    const raw = JSON.parse(raw_json) as Record<string, { epi_num: string | number; title: string; air_date: string }[]>;
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const out: Record<string, SuperFlixEpisode[]> = {};
     for (const [season, eps] of Object.entries(raw)) {
@@ -318,21 +330,15 @@ export async function superFlixStreamUrl(params: {
     return null;
   }
 
-  for (const server of servers) {
-    const videoId = String(server.id);
-    try {
-      const streamUrl = await getSourceUrl(videoId, tokens);
-      if (streamUrl) {
-        logger.info("superflix", `stream via servidor "${server.name}": ${streamUrl.slice(0, 60)}`);
-        return {
-          url: streamUrl,
-          referer: BASE + "/",
-          title: tokens.title,
-          subtitles,
-        };
-      }
-    } catch (err) {
-      logger.warn("superflix", `servidor "${server.name}" falhou: ${err}`);
+  const settled = await Promise.allSettled(
+    servers.map((server) => getSourceUrl(String(server.id), tokens).then((url) => ({ url, name: server.name })))
+  );
+  for (const res of settled) {
+    if (res.status === "rejected") { logger.warn("superflix", `servidor falhou: ${res.reason}`); continue; }
+    const { url: streamUrl, name } = res.value;
+    if (streamUrl) {
+      logger.info("superflix", `stream via servidor "${name}": ${streamUrl.slice(0, 60)}`);
+      return { url: streamUrl, referer: BASE + "/", title: tokens.title, subtitles };
     }
   }
 

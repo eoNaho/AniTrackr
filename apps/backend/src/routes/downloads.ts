@@ -248,35 +248,44 @@ export const downloadRoutes = new Elysia()
     const queued: { animeId: string; title: string; count: number }[] = [];
     let totalQueued = 0;
 
-    for (const anime of animes) {
-      const missing = getMissingEpisodes(anime.id);
-      if (!missing.length) continue;
+    // Processa em lotes de 5 para não saturar os providers
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < animes.length; i += BATCH_SIZE) {
+      const batch = animes.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (anime) => {
+          const missing = getMissingEpisodes(anime.id);
+          if (!missing.length) return null;
 
-      const episodeUrlByNumber = new Map<number, string>();
-      if (anime.source_url) {
-        try {
-          const eps = await getEpisodesWithFallback(
-            anime.source_url,
-            (anime.provider as Provider) ?? "animefire"
-          );
-          for (const ep of eps) {
-            episodeUrlByNumber.set(ep.number, ep.url);
+          const episodeUrlByNumber = new Map<number, string>();
+          if (anime.source_url) {
+            try {
+              const eps = await getEpisodesWithFallback(
+                anime.source_url,
+                (anime.provider as Provider) ?? "animefire"
+              );
+              for (const ep of eps) episodeUrlByNumber.set(ep.number, ep.url);
+            } catch (err) {
+              logger.warn("queue", `missing-all url resolve failed for ${anime.id}: ${String(err)}`);
+            }
           }
-        } catch (err) {
-          logger.warn("queue", `missing-all url resolve failed for ${anime.id}: ${String(err)}`);
+
+          let animeQueued = 0;
+          for (const epNumber of missing) {
+            const sourceUrl = episodeUrlByNumber.get(epNumber) ?? anime.source_url ?? undefined;
+            const jobs = enqueueDownloads(anime.id, [epNumber], anime.season_number, sourceUrl);
+            animeQueued += jobs.length;
+          }
+          return animeQueued > 0 ? { animeId: anime.id, title: anime.title, count: animeQueued } : null;
+        })
+      );
+
+      for (const res of batchResults) {
+        if (res.status === "fulfilled" && res.value) {
+          queued.push(res.value);
+          totalQueued += res.value.count;
         }
       }
-
-      let animeQueued = 0;
-      for (const epNumber of missing) {
-        const sourceUrl = episodeUrlByNumber.get(epNumber) ?? anime.source_url ?? undefined;
-        const jobs = enqueueDownloads(anime.id, [epNumber], anime.season_number, sourceUrl);
-        animeQueued += jobs.length;
-      }
-
-      if (!animeQueued) continue;
-      queued.push({ animeId: anime.id, title: anime.title, count: animeQueued });
-      totalQueued += animeQueued;
     }
 
     broadcastDownloadUpdate({ type: "batch-enqueued", totalQueued, ts: Date.now() });

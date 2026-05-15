@@ -66,6 +66,7 @@ export function mapQBState(state: string): "downloading" | "completed" | "paused
 }
 
 let sessionCookie = "";
+let authBypass = false;
 let lastLogin = 0;
 const SESSION_TTL_MS = 55 * 60 * 1000;
 
@@ -74,7 +75,7 @@ async function getBase(): Promise<string> {
 }
 
 async function ensureAuth(): Promise<boolean> {
-  if (sessionCookie && Date.now() - lastLogin < SESSION_TTL_MS) return true;
+  if ((sessionCookie || authBypass) && Date.now() - lastLogin < SESSION_TTL_MS) return true;
 
   const base = await getBase();
   const username = getConfig("qbittorrent_username") || "admin";
@@ -98,6 +99,7 @@ async function ensureAuth(): Promise<boolean> {
 
     const text = await resp.text();
     if (text.trim() === "Ok.") {
+      authBypass = true;
       lastLogin = Date.now();
       return true;
     }
@@ -207,7 +209,10 @@ export async function qbtAddTorrentUrl(
 export async function qbtGetTorrents(hashes?: string[]): Promise<QBTorrentInfo[]> {
   await ensureAuth();
   let url = "/api/v2/torrents/info";
-  if (hashes?.length) url += `?hashes=${hashes.join("|")}`;
+  if (hashes?.length) {
+    const safeHashes = hashes.filter((h) => /^[a-fA-F0-9]{40}$/.test(h));
+    if (safeHashes.length) url += `?hashes=${safeHashes.join("|")}`;
+  }
 
   try {
     const resp = await apiFetch(url);

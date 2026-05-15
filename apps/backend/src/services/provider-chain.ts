@@ -127,7 +127,7 @@ export async function searchAllProviders(
         () => superFlixSearch(query).then((rs) =>
           rs.map((r) => ({
             title: r.title,
-            url: r.linkUrl || r.tmdbId,
+            url: r.linkUrl || "",
             imageUrl: r.imageUrl,
             provider: "superflix" as Provider,
           }))
@@ -214,6 +214,9 @@ export async function getEpisodesWithFallback(
       else if (fallback === "nineanime" && nineAnimeId) {
         const rawEps = await nineAnimeEpisodes(nineAnimeId);
         eps = rawEps.map((e) => ({ number: e.number, label: e.title, url: e.episodeId }));
+      } else if (fallback === "allanime") {
+        // allanime requer allAnimeId — sem ele não há como buscar por URL genérica
+        logger.info("provider-chain", `fallback allanime ignorado: allAnimeId não disponível para ${animeUrl}`);
       } else if (fallback === "animedrive") {
         const rawEps = await animeDriveEpisodes(animeUrl);
         eps = rawEps.map(mapAnimeDriveEpisodeToEpisode);

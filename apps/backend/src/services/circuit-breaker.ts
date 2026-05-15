@@ -53,11 +53,11 @@ export function isAvailable(provider: string): boolean {
   if (h.state === "open") {
     if (Date.now() - h.openedAt >= RECOVERY_TIMEOUT_MS) {
       h.state = "half-open";
-      return true;
+      return true; // apenas a primeira transição libera a probe
     }
     return false;
   }
-  return true; // half-open: allow one probe
+  return false; // half-open: bloqueia até a probe resolver
 }
 
 export function getAllHealth(): Record<string, { state: CBState; failures: number; lastFailureAt: string; lastSuccessAt: string }> {

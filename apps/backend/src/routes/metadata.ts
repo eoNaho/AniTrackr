@@ -298,7 +298,7 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
       asNullableString(sourceUrl),
       asString(subtype, "TV"),
     ];
-    db.run(`
+    const result = db.run(`
       INSERT INTO animes (
         id, kitsu_id, anilist_id, mal_id, title, title_english, title_romaji,
         synopsis, poster_url, rating, kitsu_status, anilist_status,
@@ -306,6 +306,14 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO NOTHING
     `, values);
+
+    if (result.changes === 0) {
+      const existing = db.query<{ id: string }, [string]>(
+        `SELECT id FROM animes WHERE title = ? ORDER BY cached_at DESC LIMIT 1`
+      ).get(titleValue);
+      logger.info("metadata", `duplicate save "${titleValue}" — retornando id existente`);
+      return { ok: true, id: existing?.id ?? id, existed: true };
+    }
 
     logger.info("metadata", `saved "${titleValue}"`);
     return { ok: true, id };

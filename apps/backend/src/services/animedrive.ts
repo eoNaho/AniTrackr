@@ -235,14 +235,16 @@ export async function animeDriveStreamUrl(episodeUrl: string): Promise<AnimeDriv
     return null;
   }
 
-  // Resolve todas as opções e coleta candidatos
+  // Resolve todas as opções em paralelo e coleta candidatos
   interface Candidate { info: AnimeDriveStreamInfo; preferred: boolean; problematic: boolean }
   const candidates: Candidate[] = [];
 
-  for (const opt of opts) {
-    const result = await dooplayer(opt.postId, opt.type, opt.nume, epPageUrl);
-    if (!result) continue;
-    const stream = embedToStream(result.embedUrl);
+  const dooResults = await Promise.allSettled(
+    opts.map((opt) => dooplayer(opt.postId, opt.type, opt.nume, epPageUrl))
+  );
+  for (const res of dooResults) {
+    if (res.status !== "fulfilled" || !res.value) continue;
+    const stream = embedToStream(res.value.embedUrl);
     if (stream) {
       candidates.push({
         info: stream,

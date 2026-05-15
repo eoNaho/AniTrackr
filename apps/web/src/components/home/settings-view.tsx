@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchConfig,
   fetchProviderHealth,
@@ -211,17 +211,24 @@ const DEFAULTS: ConfigState = {
 export function SettingsView({ onSaved }: SettingsViewProps) {
   const [cfg, setCfg] = useState<ConfigState>({ ...DEFAULTS });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [qbtStatus, setQbtStatus] = useState<QbtConnectionStatus | null>(null);
   const [qbtTesting, setQbtTesting] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
+    setLoadError(null);
     fetchConfig()
       .then((data) => setCfg({ ...DEFAULTS, ...data }))
-      .catch(() => {})
+      .catch((e) => setLoadError((e as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -241,7 +248,8 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
       await saveConfig(cfg);
       setSaved(true);
       onSaved?.();
-      setTimeout(() => setSaved(false), 2000);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -273,6 +281,15 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
     return (
       <div className="flex h-full items-center justify-center text-[#6c7086] text-[13px]">
         carregando configurações...
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px]">
+        <span className="text-[#f38ba8]">✕ Falha ao carregar configurações</span>
+        <span className="text-[11px] text-[#6c7086]">{loadError}</span>
       </div>
     );
   }
