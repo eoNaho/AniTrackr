@@ -35,7 +35,7 @@ body:
     id: expected
     attributes:
       label: Comportamento esperado
-      placeholder: Ex: deveria baixar o episodio selecionado
+      placeholder: "Ex: deveria baixar o episodio selecionado"
     validations:
       required: true
 
@@ -43,7 +43,7 @@ body:
     id: actual
     attributes:
       label: Comportamento atual
-      placeholder: Ex: baixa episodio diferente / duplica item na biblioteca
+      placeholder: "Ex: baixa episodio diferente / duplica item na biblioteca"
     validations:
       required: true
 

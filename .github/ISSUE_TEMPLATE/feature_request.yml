@@ -31,7 +31,7 @@ body:
     id: alternatives
     attributes:
       label: Alternativas consideradas
-      placeholder: Ex: script externo / ajuste na config / workaround atual
+      placeholder: "Ex: script externo / ajuste na config / workaround atual"
 
   - type: textarea
     id: acceptance
