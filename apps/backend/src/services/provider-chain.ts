@@ -4,6 +4,17 @@
  */
 
 import { animefireSearch, goyabuSearch, animefireEpisodes, goyabuEpisodes, type ScrapeResult, type Episode } from "./scraper.ts";
+
+// ── Cache de episódios ────────────────────────────────────────────────────────
+interface EpisodeCacheEntry { data: Episode[]; expiresAt: number }
+const episodeCache = new Map<string, EpisodeCacheEntry>();
+const EPISODE_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+export function clearEpisodeCache(key?: string) {
+  if (key) episodeCache.delete(key);
+  else episodeCache.clear();
+}
+// ─────────────────────────────────────────────────────────────────────────────
 import { searchAllAnime, getAllAnimeEpisodes, getAllAnimeStreamUrl } from "./allanime.ts";
 import { nineAnimeSearch, nineAnimeEpisodes, nineAnimeStreamUrl } from "./nineanime.ts";
 import { animeDriveSearch, animeDriveEpisodes, animeDriveStreamUrl } from "./animedrive.ts";
@@ -166,6 +177,13 @@ export async function getEpisodesWithFallback(
   allAnimeId?: string,
   nineAnimeId?: string
 ): Promise<Episode[]> {
+  const cacheKey = `${provider}:${animeUrl}:${allAnimeId ?? ""}:${nineAnimeId ?? ""}`;
+  const cached = episodeCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    logger.info("provider-chain", `cache hit: ${cacheKey.slice(0, 60)}`);
+    return cached.data;
+  }
+
   const primary = async (): Promise<Episode[]> => {
     if (provider === "animefire") return animefireEpisodes(animeUrl);
     if (provider === "goyabu") return goyabuEpisodes(animeUrl);
@@ -192,6 +210,7 @@ export async function getEpisodesWithFallback(
     const eps = await primary();
     if (eps.length > 0) {
       recordSuccess(provider);
+      episodeCache.set(cacheKey, { data: eps, expiresAt: Date.now() + EPISODE_CACHE_TTL });
       return eps;
     }
     logger.warn("provider-chain", `primary (${provider}) retornou 0 episódios, tentando fallbacks`);
@@ -226,6 +245,7 @@ export async function getEpisodesWithFallback(
       }
       if (eps.length) {
         recordSuccess(fallback);
+        episodeCache.set(cacheKey, { data: eps, expiresAt: Date.now() + EPISODE_CACHE_TTL });
         return eps;
       }
     } catch (err) {

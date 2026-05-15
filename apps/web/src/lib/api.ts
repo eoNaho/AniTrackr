@@ -429,3 +429,71 @@ export async function enqueueEpisodes(payload: {
   if (!response.ok) throw new Error(`Enqueue episodes failed: ${response.status}`);
   return response.json() as Promise<{ ok: boolean; queued: number }>;
 }
+
+// ── Episodes individuais ───────────────────────────────────────────────────────
+
+export type AnimeEpisode = {
+  id: string;
+  number: number;
+  season: number;
+  title: string | null;
+  synopsis: string | null;
+  aired: string | null;
+  durationMin: number | null;
+  isFiller: number;
+  isRecap: number;
+  status: string;
+  filePath: string | null;
+  fileSizeMb: number;
+  watched: number;
+  watchProgress: number;
+};
+
+export async function fetchAnimeEpisodes(animeId: string, season?: number) {
+  const params = season != null ? `?season=${season}` : "";
+  return requestJson<{
+    animeId: string;
+    total: number;
+    missingCount: number;
+    missing: number[];
+    episodes: AnimeEpisode[];
+  }>(`/api/library/${animeId}/episodes${params}`);
+}
+
+export async function markEpisodeWatched(animeId: string, episodeNumber: number, watched: boolean) {
+  const response = await fetch(`${getBackendUrl()}/api/library/${animeId}/episodes/${episodeNumber}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ watched: watched ? 1 : 0 }),
+  });
+  if (!response.ok) throw new Error(`Mark watched failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean }>;
+}
+
+// ── Histórico e dashboard ─────────────────────────────────────────────────────
+
+export type DownloadHistoryMonth = { month: string; count: number; total_bytes: number };
+export type DownloadHistoryProvider = { provider: string; completed: number; failed: number };
+
+export async function fetchDownloadHistory() {
+  return requestJson<{
+    byMonth: DownloadHistoryMonth[];
+    byProvider: DownloadHistoryProvider[];
+    totals: { total: number; completed: number; failed: number; total_bytes: number };
+  }>("/api/downloads/history");
+}
+
+// ── Auto-schedule ─────────────────────────────────────────────────────────────
+
+export async function fetchAutoScheduleStatus() {
+  return requestJson<{ active: boolean; intervalHours: number }>("/api/auto-schedule/status");
+}
+
+export async function triggerAutoSchedule() {
+  const response = await fetch(`${getBackendUrl()}/api/auto-schedule/run`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Auto-schedule run failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; message: string }>;
+}

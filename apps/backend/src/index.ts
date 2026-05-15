@@ -10,6 +10,8 @@ import { subtitleRoutes } from "./routes/subtitles.ts";
 import { torrentRoutes, startTorrentMonitor, restoreTorrentMonitors } from "./routes/torrent.ts";
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
+import { runBackupIfDue } from "./services/backup.ts";
+import { startAutoScheduler } from "./services/auto-schedule.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3001");
 
@@ -67,6 +69,12 @@ const app = new Elysia()
 // Inicia monitoramento de torrents ativos
 restoreTorrentMonitors();
 startTorrentMonitor();
+
+// Backup semanal do banco
+runBackupIfDue();
+
+// Agendamento automático de séries em lançamento
+startAutoScheduler();
 
 logger.info("app", `╔══════════════════════════════════════════════════╗`);
 logger.info("app", `║  GoAnime Tracker Backend v2.1.0                  ║`);

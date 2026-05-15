@@ -12,6 +12,7 @@ import {
 import db from "../db/index.ts";
 import { getMissingEpisodes } from "../services/scanner.ts";
 import { getEpisodesWithFallback, type Provider } from "../services/provider-chain.ts";
+import { getAutoScheduleStatus, triggerAutoScheduleNow } from "../services/auto-schedule.ts";
 import { logger } from "../utils/logger.ts";
 
 type SSEClient = { send: (event: string, payload: unknown) => void; close: () => void };
@@ -311,6 +312,48 @@ export const downloadRoutes = new Elysia()
     }
     logger.info("queue", `cancelled all: ${cancelled} jobs`);
     return { ok: true, cancelled };
+  })
+
+  // GET /api/downloads/history — dados históricos para dashboard
+  .get("/downloads/history", () => {
+    const byMonth = db.query<{ month: string; count: number; total_bytes: number }, []>(`
+      SELECT strftime('%Y-%m', completed_at) as month,
+             COUNT(*) as count,
+             COALESCE(SUM(total_bytes), 0) as total_bytes
+      FROM downloads
+      WHERE status = 'completed' AND completed_at IS NOT NULL
+      GROUP BY month
+      ORDER BY month DESC
+      LIMIT 12
+    `).all();
+
+    const byProvider = db.query<{ provider: string; completed: number; failed: number }, []>(`
+      SELECT provider,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+      FROM downloads
+      GROUP BY provider
+      ORDER BY completed DESC
+    `).all();
+
+    const totals = db.query<{ total: number; completed: number; failed: number; total_bytes: number }, []>(`
+      SELECT COUNT(*) as total,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+             COALESCE(SUM(CASE WHEN status = 'completed' THEN total_bytes ELSE 0 END), 0) as total_bytes
+      FROM downloads
+    `).get() ?? { total: 0, completed: 0, failed: 0, total_bytes: 0 };
+
+    return { byMonth, byProvider, totals };
+  })
+
+  // GET /api/auto-schedule/status
+  .get("/auto-schedule/status", () => getAutoScheduleStatus())
+
+  // POST /api/auto-schedule/run — força verificação imediata
+  .post("/auto-schedule/run", async () => {
+    await triggerAutoScheduleNow();
+    return { ok: true, message: "Verificação concluída" };
   })
 
   .delete("/downloads/monitor", () => {

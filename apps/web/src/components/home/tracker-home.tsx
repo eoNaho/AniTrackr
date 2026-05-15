@@ -106,6 +106,7 @@ export function TrackerHome() {
   const [isLoadingMeta, setIsLoadingMeta] = useState(false);
 
   const selectVersionRef = useRef(0);
+  const prevJobStatusRef = useRef<Map<string, string>>(new Map());
 
   const pushLog = useCallback((module: string, text: string) => {
     setLogs((cur) => [
@@ -157,6 +158,13 @@ export function TrackerHome() {
       setIsBusy(false);
     }
   }, [pushLog]);
+
+  // Solicitar permissão de notificação na primeira carga
+  useEffect(() => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -231,6 +239,22 @@ export function TrackerHome() {
       clearInterval(timer);
     };
   }, [refreshDownloads, streamState]);
+
+  // Detectar downloads completados para notificação
+  useEffect(() => {
+    const prev = prevJobStatusRef.current;
+    for (const job of downloadJobs) {
+      if (job.status === "completed" && prev.get(job.id) === "downloading") {
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          new Notification(`✓ Download concluído`, {
+            body: `${job.animeTitle} — Ep ${job.episodeNumber}`,
+            tag: job.id,
+          });
+        }
+      }
+    }
+    prevJobStatusRef.current = new Map(downloadJobs.map((j) => [j.id, j.status]));
+  }, [downloadJobs]);
 
   const hasActiveDownloads = useMemo(
     () => downloadJobs.some((j) => j.status === "queued" || j.status === "downloading" || j.status === "retry_wait"),
@@ -693,20 +717,6 @@ export function TrackerHome() {
               onClearAll={() => setSelectedEpisodes([])}
               isLoadingEpisodes={isLoadingEpisodes}
               downloadPath={downloadPath}
-              onDownloadPathChange={setDownloadPath}
-              quality={quality}
-              onQualityChange={setQuality}
-              maxConcurrent={maxConcurrent}
-              onMaxConcurrentChange={setMaxConcurrent}
-              namingScheme={namingScheme}
-              onNamingSchemeChange={setNamingScheme}
-              ytDlpPath={ytDlpPath}
-              onYtDlpPathChange={setYtDlpPath}
-              ffmpegPath={ffmpegPath}
-              onFfmpegPathChange={setFfmpegPath}
-              allowSimulatedDownloads={allowSimulatedDownloads}
-              onAllowSimulatedDownloadsChange={setAllowSimulatedDownloads}
-              onSavePath={handleSavePath}
               onQueueSelected={handleQueueSelected}
             />
           )}

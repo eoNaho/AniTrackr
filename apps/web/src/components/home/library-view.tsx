@@ -1,8 +1,9 @@
 "use client";
 
-import React from "react";
+import React, { useMemo, useState } from "react";
 import type { DownloadJob } from "@/lib/api";
 import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, generateBar, statusBadgeClass, statusColor } from "./ui";
+import { EpisodeList } from "./episode-list";
 
 type Props = {
   animes: AnimeView[];
@@ -69,6 +70,27 @@ export function LibraryView({
   onRefreshDownloads,
   onClearQueueMonitor,
 }: Props) {
+  const [filter, setFilter] = useState("");
+  const [sortBy, setSortBy] = useState("title");
+
+  const filteredAnimes = useMemo(() => {
+    const q = filter.toLowerCase();
+    let list = q
+      ? animes.filter((a) =>
+          a.title.toLowerCase().includes(q) ||
+          (a.altTitle ?? "").toLowerCase().includes(q)
+        )
+      : [...animes];
+    switch (sortBy) {
+      case "progress": list.sort((a, b) => b.progress - a.progress); break;
+      case "missing":  list.sort((a, b) => b.missing - a.missing); break;
+      case "year":     list.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)); break;
+      case "rating":   list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0)); break;
+      default:         list.sort((a, b) => a.title.localeCompare(b.title)); break;
+    }
+    return list;
+  }, [animes, filter, sortBy]);
+
   const selected = animes[selectedIndex < animes.length ? selectedIndex : 0] ?? null;
   const progress = selected
     ? Math.min(100, Math.max(0, Math.round((selected.downloaded / Math.max(1, selected.total)) * 100)))
@@ -88,8 +110,28 @@ export function LibraryView({
           <StatBox label="Missing eps" value={missingEpisodes} command="scan.diff" />
           <StatBox label="Storage" value={totalStorage} command="du -sh" />
         </div>
+        {/* Filtro + Sort */}
+        <div className="flex gap-2 border-b border-dashed border-[#45475a] px-3 py-2">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filtrar..."
+            className="flex-1 border border-[#45475a] bg-black/20 px-2 py-1 text-[12px] text-[#e0e0ed] placeholder-[#6c7086] outline-none focus:border-[#cba6f7]"
+          />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="border border-[#45475a] bg-[#0f0f14] px-2 text-[12px] text-[#e0e0ed] outline-none focus:border-[#cba6f7]"
+          >
+            <option value="title">A→Z</option>
+            <option value="progress">Progresso</option>
+            <option value="missing">Faltando</option>
+            <option value="rating">Rating</option>
+            <option value="year">Ano</option>
+          </select>
+        </div>
         <div className="flex items-center justify-between border-b border-dashed border-[#45475a] px-5 py-2 text-[11px] uppercase text-[#6c7086]">
-          <span>Titulo</span>
+          <span>Titulo {filter && <span className="text-[#cba6f7]">({filteredAnimes.length}/{animes.length})</span>}</span>
           <span className="hidden md:block">Status · Progresso · Eps</span>
         </div>
         <div className="flex-1 overflow-auto py-1">
@@ -97,16 +139,21 @@ export function LibraryView({
             <div className="px-4 py-6 text-[13px] text-[#6c7086]">
               Biblioteca vazia. Use a aba <span className="text-[#cba6f7]">[SEARCH]</span> para adicionar animes.
             </div>
+          ) : filteredAnimes.length === 0 ? (
+            <div className="px-4 py-4 text-[12px] text-[#6c7086]">Nenhum resultado para "{filter}"</div>
           ) : (
-            animes.map((anime, i) => (
-              <AnimeRow
-                key={anime.id}
-                anime={anime}
-                index={i}
-                selected={i === selectedIndex}
-                onSelect={() => onSelect(i)}
-              />
-            ))
+            filteredAnimes.map((anime) => {
+              const realIdx = animes.findIndex((a) => a.id === anime.id);
+              return (
+                <AnimeRow
+                  key={anime.id}
+                  anime={anime}
+                  index={realIdx}
+                  selected={realIdx === selectedIndex}
+                  onSelect={() => onSelect(realIdx)}
+                />
+              );
+            })
           )}
         </div>
       </Panel>
@@ -240,6 +287,14 @@ export function LibraryView({
                   </p>
                 </div>
               )}
+
+              {/* Episódios individuais */}
+              <div>
+                <div className="mb-1 text-[12px] font-bold text-[#89dceb]">-- EPISÓDIOS --</div>
+                <div className="max-h-[200px] overflow-y-auto border border-[#45475a] bg-black/20 p-2">
+                  <EpisodeList animeId={selected.id} />
+                </div>
+              </div>
 
               <div className="mt-auto grid gap-2 border border-dashed border-[#45475a] bg-black/20 p-3 text-[12px] md:grid-cols-2">
                 <ActionBtn kbd="d" label="Download missing eps" onClick={onQueueMissing} disabled={isBusy} />

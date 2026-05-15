@@ -7,8 +7,13 @@ import {
   resetProviderCircuit,
   saveConfig,
   testQbtConnection,
+  fetchDownloadHistory,
+  fetchAutoScheduleStatus,
+  triggerAutoSchedule,
   type ProviderHealthEntry,
   type QbtConnectionStatus,
+  type DownloadHistoryMonth,
+  type DownloadHistoryProvider,
 } from "@/lib/api";
 import { Panel } from "./ui";
 
@@ -76,6 +81,152 @@ function Btn({
     >
       {children}
     </button>
+  );
+}
+
+// ── Stats Dashboard ───────────────────────────────────────────────────────────
+
+function fmtBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+function StatsPanel() {
+  const [byMonth, setByMonth] = useState<DownloadHistoryMonth[]>([]);
+  const [byProvider, setByProvider] = useState<DownloadHistoryProvider[]>([]);
+  const [totals, setTotals] = useState<{ total: number; completed: number; failed: number; total_bytes: number } | null>(null);
+  const [autoSched, setAutoSched] = useState<{ active: boolean; intervalHours: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [running, setRunning] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [hist, sched] = await Promise.allSettled([fetchDownloadHistory(), fetchAutoScheduleStatus()]);
+      if (hist.status === "fulfilled") {
+        setByMonth(hist.value.byMonth);
+        setByProvider(hist.value.byProvider);
+        setTotals(hist.value.totals);
+      }
+      if (sched.status === "fulfilled") setAutoSched(sched.value);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function handleRunNow() {
+    setRunning(true);
+    try { await triggerAutoSchedule(); await load(); }
+    finally { setRunning(false); }
+  }
+
+  const maxMonthCount = Math.max(1, ...byMonth.map((m) => m.count));
+
+  return (
+    <Panel title="[ESTATÍSTICAS]" className="xl:col-span-2">
+      <div className="p-3 text-[12px]">
+        {/* Totais */}
+        {totals && (
+          <div className="mb-4 grid grid-cols-4 gap-2">
+            {[
+              { label: "total", value: totals.total, color: "text-[#e0e0ed]" },
+              { label: "concluídos", value: totals.completed, color: "text-[#a6e3a1]" },
+              { label: "falharam", value: totals.failed, color: "text-[#f38ba8]" },
+              { label: "baixado", value: fmtBytes(totals.total_bytes), color: "text-[#89dceb]" },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="border border-[#2a2a38] bg-[#0d0d12] p-2 text-center">
+                <div className="text-[11px] text-[#6c7086] uppercase">{label}</div>
+                <div className={`mt-1 text-[15px] font-extrabold ${color}`}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* Gráfico por mês */}
+          <div>
+            <div className="mb-2 text-[11px] font-bold text-[#89dceb] uppercase">downloads / mês</div>
+            {loading ? (
+              <div className="text-[#6c7086]">carregando...</div>
+            ) : byMonth.length === 0 ? (
+              <div className="text-[#6c7086]">sem dados ainda</div>
+            ) : (
+              <div className="space-y-1">
+                {byMonth.slice(0, 8).map((m) => {
+                  const pct = Math.round((m.count / maxMonthCount) * 100);
+                  return (
+                    <div key={m.month} className="flex items-center gap-2">
+                      <span className="w-16 shrink-0 text-[#6c7086]">{m.month}</span>
+                      <div className="flex-1 h-4 bg-[#1a1a2e] border border-[#2a2a38]">
+                        <div
+                          className="h-full bg-[#cba6f7]/60 transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-8 shrink-0 text-right text-[#e0e0ed]">{m.count}</span>
+                      <span className="w-16 shrink-0 text-right text-[#6c7086]">{fmtBytes(m.total_bytes)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Por provider */}
+          <div>
+            <div className="mb-2 text-[11px] font-bold text-[#89dceb] uppercase">por provider</div>
+            {byProvider.length === 0 ? (
+              <div className="text-[#6c7086]">sem dados ainda</div>
+            ) : (
+              <div className="space-y-1">
+                {byProvider.map((p) => {
+                  const total = p.completed + p.failed;
+                  const rate = total > 0 ? Math.round((p.completed / total) * 100) : 0;
+                  return (
+                    <div key={p.provider} className="flex items-center justify-between border border-[#2a2a38] bg-[#0d0d12] px-2 py-1">
+                      <span className="text-[#e0e0ed] uppercase">[{p.provider}]</span>
+                      <div className="flex gap-3 text-[11px]">
+                        <span className="text-[#a6e3a1]">{p.completed} ok</span>
+                        <span className="text-[#f38ba8]">{p.failed} fail</span>
+                        <span className={rate >= 80 ? "text-[#a6e3a1]" : rate >= 50 ? "text-[#f9e2af]" : "text-[#f38ba8]"}>
+                          {rate}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Auto-schedule */}
+        <div className="mt-4 border-t border-[#45475a] pt-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="font-bold text-[#cba6f7] uppercase">[AUTO-SCHEDULE]</span>
+              {autoSched && (
+                <span className="ml-2 text-[11px] text-[#6c7086]">
+                  — verifica séries em lançamento a cada {autoSched.intervalHours}h
+                  <span className={`ml-2 font-bold ${autoSched.active ? "text-[#a6e3a1]" : "text-[#f38ba8]"}`}>
+                    {autoSched.active ? "● ativo" : "✕ inativo"}
+                  </span>
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Btn onClick={load} disabled={loading}>{loading ? "..." : "↻"}</Btn>
+              <Btn onClick={handleRunNow} disabled={running} variant="success">
+                {running ? "verificando..." : "verificar agora"}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -534,6 +685,9 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
               </div>
             </div>
           </Panel>
+
+          {/* Estatísticas e Auto-schedule */}
+          <StatsPanel />
 
           {/* Provider Health */}
           <ProviderHealthPanel />

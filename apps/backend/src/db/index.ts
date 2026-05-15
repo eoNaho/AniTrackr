@@ -131,6 +131,8 @@ ensureColumn("animes", "mal_id", "mal_id INTEGER");
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_retry_at ON downloads(next_retry_at)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_episode ON downloads(anime_id, season, episode_number)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_type_status ON downloads(download_type, status)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_animes_tracked_status ON animes(is_tracked, anilist_status)`);
 
 // ── config ─────────────────────────────────────────────────────────────────
 db.run(`

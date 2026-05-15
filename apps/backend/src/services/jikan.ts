@@ -27,7 +27,7 @@ export interface JikanAnime {
 }
 
 const BASE = "https://api.jikan.moe/v4";
-const RATE_LIMIT_MS = 500; // Jikan permite ~3 req/s
+const RATE_LIMIT_MS = 400; // Jikan permite ~3 req/s; 400ms é seguro
 let lastRequestAt = 0;
 
 async function jikanFetch<T>(path: string): Promise<T | null> {
@@ -87,44 +87,52 @@ export async function jikanGetEpisode(malId: number, episodeNo: number): Promise
   };
 }
 
+function parseEpisodeRow(ep: any): JikanEpisode {
+  return {
+    number: ep.mal_id,
+    title: ep.title ?? "",
+    titleRomaji: ep.title_romanji ?? "",
+    titleJapanese: ep.title_japanese ?? "",
+    aired: ep.aired ?? "",
+    durationSec: 0,
+    isFiller: ep.filler ?? false,
+    isRecap: ep.recap ?? false,
+    synopsis: ep.synopsis ?? "",
+  };
+}
+
 export async function jikanGetEpisodes(
   malId: number,
   page = 1
-): Promise<{ episodes: JikanEpisode[]; hasNextPage: boolean }> {
+): Promise<{ episodes: JikanEpisode[]; hasNextPage: boolean; lastPage: number }> {
   const data = await jikanFetch<{ data: any[]; pagination: any }>(
     `/anime/${malId}/episodes?page=${page}`
   );
-  if (!data?.data) return { episodes: [], hasNextPage: false };
+  if (!data?.data) return { episodes: [], hasNextPage: false, lastPage: 1 };
 
   return {
-    episodes: data.data.map((ep) => ({
-      number: ep.mal_id,
-      title: ep.title ?? "",
-      titleRomaji: ep.title_romanji ?? "",
-      titleJapanese: ep.title_japanese ?? "",
-      aired: ep.aired ?? "",
-      durationSec: 0,
-      isFiller: ep.filler ?? false,
-      isRecap: ep.recap ?? false,
-      synopsis: ep.synopsis ?? "",
-    })),
+    episodes: data.data.map(parseEpisodeRow),
     hasNextPage: data.pagination?.has_next_page ?? false,
+    lastPage: data.pagination?.last_visible_page ?? 1,
   };
 }
 
 export async function jikanGetAllEpisodes(malId: number): Promise<JikanEpisode[]> {
-  const all: JikanEpisode[] = [];
-  let page = 1;
-  let hasMore = true;
+  // Busca a primeira página para descobrir o total de páginas
+  const first = await jikanGetEpisodes(malId, 1);
+  if (!first.episodes.length) return [];
+  if (first.lastPage <= 1) return first.episodes;
 
-  while (hasMore && page <= 20) {
-    const { episodes, hasNextPage } = await jikanGetEpisodes(malId, page);
-    all.push(...episodes);
-    hasMore = hasNextPage;
-    page++;
-  }
+  // Busca páginas restantes com stagger de 450ms para respeitar 3 req/s do Jikan
+  const remainingPages = Array.from({ length: first.lastPage - 1 }, (_, i) => i + 2);
+  const rest = await Promise.all(
+    remainingPages.map(async (page, idx) => {
+      await new Promise((r) => setTimeout(r, idx * 450));
+      return jikanGetEpisodes(malId, page);
+    })
+  );
 
-  return all;
+  return [first.episodes, ...rest.map((r) => r.episodes)].flat();
 }
 
 export async function jikanGetAnimeById(malId: number): Promise<JikanAnime | null> {
