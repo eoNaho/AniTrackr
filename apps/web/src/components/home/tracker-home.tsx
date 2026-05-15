@@ -74,6 +74,127 @@ function buildEpisodeKey(episode: { number: number; label: string; url: string }
   return `${episode.number}::${episode.url}::${episode.label}::${index}`;
 }
 
+function normalizeAscii(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function parseSafePositiveInt(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0 || n > 1000) return null;
+  return n;
+}
+
+function parseRomanNumeral(value: string): number | null {
+  const roman = value.trim().toUpperCase();
+  const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
+  let total = 0;
+  let prev = 0;
+  for (let i = roman.length - 1; i >= 0; i -= 1) {
+    const cur = map[roman[i]];
+    if (!cur) return null;
+    if (cur < prev) total -= cur;
+    else total += cur;
+    prev = cur;
+  }
+  if (total <= 0 || total > 100) return null;
+  return total;
+}
+
+const JAPANESE_NUMBER_MAP: Record<string, number> = {
+  ichi: 1,
+  ni: 2,
+  san: 3,
+  yon: 4,
+  shi: 4,
+  go: 5,
+  roku: 6,
+  nana: 7,
+  shichi: 7,
+  hachi: 8,
+  kyu: 9,
+  ku: 9,
+  juu: 10,
+};
+
+function inferSeasonNumber(...candidates: Array<string | null | undefined>): number {
+  for (const rawCandidate of candidates) {
+    if (!rawCandidate) continue;
+    const candidate = normalizeAscii(rawCandidate);
+
+    const direct =
+      candidate.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i)
+      ?? candidate.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
+      ?? candidate.match(/\bs(?:eason)?\s*0?(\d{1,2})\b/i)
+      ?? candidate.match(/\b(\d{1,2})\s*no\s*shou\b/i);
+    if (direct) {
+      const parsed = parseSafePositiveInt(direct[1]);
+      if (parsed != null) return parsed;
+    }
+
+    const roman = candidate.match(/\b(?:season|temporada)\s*([ivxlc]{1,5})\b/i);
+    if (roman) {
+      const parsed = parseRomanNumeral(roman[1]);
+      if (parsed != null) return parsed;
+    }
+
+    const japaneseNoShou = candidate.match(/\b([a-z]+)\s+no\s+shou\b/i);
+    if (japaneseNoShou) {
+      const parsed = JAPANESE_NUMBER_MAP[japaneseNoShou[1]];
+      if (parsed != null) return parsed;
+    }
+  }
+
+  return 1;
+}
+
+function inferEpisodeNumberFromUrl(url: string): number | null {
+  if (!url?.trim()) return null;
+
+  const raw = url.trim();
+  const rawEpisode = raw.match(/(?:episodio|episode|ep)[-_/ ]*(\d{1,4})(?:\b|$)/i);
+  if (rawEpisode) return parseSafePositiveInt(rawEpisode[1]);
+
+  try {
+    const parsed = new URL(raw);
+    const fromQuery =
+      parseSafePositiveInt(parsed.searchParams.get("ep"))
+      ?? parseSafePositiveInt(parsed.searchParams.get("episode"))
+      ?? parseSafePositiveInt(parsed.searchParams.get("episodio"));
+    if (fromQuery != null) return fromQuery;
+
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const last = segments.length > 0 ? segments[segments.length - 1] : "";
+    if (/^\d{1,4}$/.test(last)) {
+      return parseSafePositiveInt(last);
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  return null;
+}
+
+function inferEpisodeNumber(episode: { number: number; label: string; url: string }, fallback: number): number {
+  const fromUrl = inferEpisodeNumberFromUrl(episode.url);
+  if (fromUrl != null) return fromUrl;
+
+  const fromLabel = normalizeAscii(episode.label).match(/\b(?:episodio|episode|ep)\s*\.?\s*(\d{1,4})\b/i);
+  if (fromLabel) {
+    const parsed = parseSafePositiveInt(fromLabel[1]);
+    if (parsed != null) return parsed;
+  }
+
+  if (Number.isFinite(episode.number) && episode.number > 0) {
+    return episode.number;
+  }
+
+  return fallback;
+}
+
 export function TrackerHome() {
   const [mode, setMode] = useState<Mode>("library");
   const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
@@ -537,10 +658,19 @@ export function TrackerHome() {
     searchEpisodes({ provider: result.provider ?? searchSource, url: result.url, allAnimeId: result.allAnimeId ?? result.id })
       .then((res) => {
         if (selectVersionRef.current !== version) return;
-        const eps: SearchEpisode[] = (res.episodes ?? []).map((episode, index) => ({
-          ...episode,
-          key: buildEpisodeKey(episode, index),
-        }));
+        const eps: SearchEpisode[] = (res.episodes ?? [])
+          .map((episode, index) => {
+            const normalizedEpisode = {
+              ...episode,
+              number: inferEpisodeNumber(episode, index + 1),
+              label: episode.label || `Episódio ${index + 1}`,
+            };
+            return {
+              ...normalizedEpisode,
+              key: buildEpisodeKey(normalizedEpisode, index),
+            };
+          })
+          .sort((a, b) => a.number - b.number);
         setEpisodes(eps);
         setSelectedEpisodes(eps.slice(0, 1).map((e) => e.key));
         pushLog("search", `${result.title}: ${res.total} eps`);
@@ -558,22 +688,26 @@ export function TrackerHome() {
         .filter((ep) => selectedSet.has(ep.key))
         .sort((a, b) => a.number - b.number);
 
-      // Agrupa episódios por URL para minimizar chamadas à API e
-      // valida antes de criar o registro na biblioteca
-      const urlGroups = new Map<string, number[]>();
+      // Mantém a relação 1:1 entre (episódio, URL) para evitar drift no monitor.
+      const enqueueTargets = new Map<string, { number: number; sourceUrl: string }>();
       for (const episode of selectedEntries) {
         const sourceUrl = episode.url || selectedResult.url || "";
         if (!sourceUrl) continue;
-        const group = urlGroups.get(sourceUrl) ?? [];
-        if (!group.includes(episode.number)) {
-          group.push(episode.number);
+        const key = `${episode.number}::${sourceUrl}`;
+        if (!enqueueTargets.has(key)) {
+          enqueueTargets.set(key, { number: episode.number, sourceUrl });
         }
-        urlGroups.set(sourceUrl, group);
       }
 
-      if (urlGroups.size === 0) {
+      if (enqueueTargets.size === 0) {
         throw new Error("Nenhum episódio com URL válida para enfileirar.");
       }
+
+      const inferredSeason = inferSeasonNumber(
+        selectedResult.title,
+        kitsuMeta?.title,
+        kitsuMeta?.altTitle,
+      );
 
       const lib = await createLibraryAnime({
         title: selectedResult.title,
@@ -586,18 +720,24 @@ export function TrackerHome() {
         year: kitsuMeta?.year,
         rating: kitsuMeta?.rating,
         kitsuId: kitsuMeta?.kitsuId,
+        seasonNumber: inferredSeason,
       });
       if (lib.reused) {
         pushLog("library", `${selectedResult.title}: reutilizado registro existente`);
       }
 
       let queuedCount = 0;
-      for (const [sourceUrl, eps] of urlGroups) {
-        await enqueueEpisodes({ animeId: lib.id, episodes: eps, sourceUrl });
-        queuedCount += eps.length;
+      for (const target of enqueueTargets.values()) {
+        const res = await enqueueEpisodes({
+          animeId: lib.id,
+          episodes: [target.number],
+          season: inferredSeason,
+          sourceUrl: target.sourceUrl,
+        });
+        queuedCount += res.queued ?? 0;
       }
 
-      pushLog("queue", `${selectedResult.title}: ${queuedCount} eps enfileirados`);
+      pushLog("queue", `${selectedResult.title}: ${queuedCount}/${enqueueTargets.size} eps enfileirados`);
       await refreshData();
       setMode("library");
     } catch (e) {

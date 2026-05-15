@@ -20,6 +20,8 @@
     "docker:logs:image": "docker compose -f docker-compose.images.yml logs -f --tail=150"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "typescript": "^6.0.3"
+
   }
 }

@@ -127,6 +127,10 @@ ensureColumn("downloads", "download_type", "download_type TEXT DEFAULT 'ytdlp'")
 ensureColumn("downloads", "torrent_hash", "torrent_hash TEXT");
 ensureColumn("downloads", "magnet_link", "magnet_link TEXT");
 ensureColumn("animes", "mal_id", "mal_id INTEGER");
+// Título base da série (sem sufixo de temporada) — usado para nomeação de pastas
+// Populado a partir das relações AniList (cadeia PREQUEL) para garantir que todas as
+// temporadas de um mesmo anime compartilhem a mesma pasta raiz.
+ensureColumn("animes", "series_title", "series_title TEXT DEFAULT ''");
 
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_retry_at ON downloads(next_retry_at)`);

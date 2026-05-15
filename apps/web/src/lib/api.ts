@@ -317,6 +317,7 @@ export async function createLibraryAnime(payload: {
   year?: number | null;
   rating?: number | null;
   kitsuId?: string;
+  seasonNumber?: number;
   tags?: string[];
 }) {
   const response = await fetch(`${getBackendUrl()}/api/library`, {
@@ -334,6 +335,7 @@ export async function createLibraryAnime(payload: {
       year: payload.year ?? null,
       rating: payload.rating ?? null,
       kitsuId: payload.kitsuId ?? null,
+      seasonNumber: payload.seasonNumber ?? null,
       tags: payload.tags ?? [],
     }),
   });

@@ -3,11 +3,12 @@ import { mkdirSync, readFileSync, statSync } from "fs";
 import { dirname } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
-import { buildPath } from "./naming.ts";
+import { buildPath, stripSeasonSuffix } from "./naming.ts";
 import { getAllAnimeStreamUrl, searchAllAnime } from "./allanime.ts";
 import { animefireEpisodes, animefireSearch } from "./scraper.ts";
 import { resolveDownloadSourceUrl } from "./source-resolver.ts";
 import { generateSingleEpisodeNfoAsync } from "./jellyfin.ts";
+import { getAniListAnime, resolveSeriesRootTitle } from "./anilist.ts";
 
 export type DownloadStatus = "queued" | "downloading" | "retry_wait" | "completed" | "failed" | "cancelled";
 const DOWNLOAD_UA =
@@ -551,14 +552,15 @@ function completeJob(jobId: string, animeId: string, episode: number, season: nu
 }
 
 function simulateDownload(jobId: string, animeId: string, episode: number, season: number) {
-  const anime = db.query<{ title: string; title_english: string | null; year: number | null }, [string]>(
-    `SELECT title, title_english, year FROM animes WHERE id = ?`
+  const anime = db.query<{ title: string; title_english: string | null; year: number | null; series_title: string | null }, [string]>(
+    `SELECT title, title_english, year, series_title FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return;
 
   const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
-  const title = anime.title_english ?? anime.title;
+  // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
+  const title = anime.series_title || (anime.title_english ?? anime.title);
   const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null);
 
   try {
@@ -625,12 +627,13 @@ async function realDownload(
   const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
 
-  const anime = db.query<{ title: string; title_english: string | null; year: number | null }, [string]>(
-    `SELECT title, title_english, year FROM animes WHERE id = ?`
+  const anime = db.query<{ title: string; title_english: string | null; year: number | null; series_title: string | null }, [string]>(
+    `SELECT title, title_english, year, series_title FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return;
 
-  const title = anime.title_english ?? anime.title;
+  // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
+  const title = anime.series_title || (anime.title_english ?? anime.title);
   const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null);
 
   try {
@@ -826,6 +829,48 @@ async function realDownload(
   );
 }
 
+/**
+ * Garante que series_title está populado antes de construir o caminho de download.
+ * Usa AniList (via relações PREQUEL) para obter o título raiz da série.
+ * Se não tiver anilist_id, aplica stripSeasonSuffix como fallback.
+ * Resultado é persistido no banco para chamadas subsequentes.
+ */
+async function ensureSeriesTitle(animeId: string): Promise<void> {
+  const anime = db.query<{
+    series_title: string | null;
+    anilist_id: number | null;
+    title: string;
+    title_english: string | null;
+  }, [string]>(
+    `SELECT series_title, anilist_id, title, title_english FROM animes WHERE id = ?`
+  ).get(animeId);
+
+  if (!anime || anime.series_title) return;
+
+  let resolved: string | null = null;
+
+  if (anime.anilist_id) {
+    try {
+      const anilistData = await getAniListAnime(anime.anilist_id);
+      if (anilistData) {
+        resolved = resolveSeriesRootTitle(anilistData);
+        logger.info("downloader", JSON.stringify({ event: "series_title_resolved_anilist", animeId, resolved }));
+      }
+    } catch (err) {
+      logger.warn("downloader", `ensureSeriesTitle AniList failed for ${animeId}: ${err}`);
+    }
+  }
+
+  if (!resolved) {
+    resolved = stripSeasonSuffix(anime.title_english ?? anime.title);
+    logger.info("downloader", JSON.stringify({ event: "series_title_resolved_fallback", animeId, resolved }));
+  }
+
+  if (resolved) {
+    db.run(`UPDATE animes SET series_title = ? WHERE id = ?`, [resolved, animeId]);
+  }
+}
+
 async function startDownload(jobId: string, animeId: string, episode: number, season: number, sourceUrl: string | null) {
   clearTimerMap(scheduledStarts, jobId);
 
@@ -833,6 +878,9 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
   if (!current || (current.status !== "queued" && current.status !== "retry_wait")) {
     return;
   }
+
+  // Resolve series_title antes de construir o caminho — garante pasta correta da série
+  await ensureSeriesTitle(animeId);
 
   let effectiveSourceUrl = sourceUrl;
   let downloadReferer: string | null = null;
@@ -968,6 +1016,62 @@ function scheduleStart(
   scheduledStarts.set(jobId, timer);
 }
 
+function parseEpisodeCandidate(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 5000) return null;
+  return parsed;
+}
+
+function inferEpisodeFromSourceUrl(sourceUrl?: string | null): number | null {
+  if (!sourceUrl) return null;
+  const raw = sourceUrl.trim();
+  if (!raw) return null;
+
+  const asSimpleNumber = parseEpisodeCandidate(raw);
+  if (asSimpleNumber != null && /^\d{1,4}$/.test(raw)) {
+    return asSimpleNumber;
+  }
+
+  const fromRawToken = raw.match(/(?:episodio|episode|ep)[^0-9]{0,4}(\d{1,4})(?:\b|$)/i);
+  if (fromRawToken) {
+    return parseEpisodeCandidate(fromRawToken[1]);
+  }
+
+  try {
+    const parsed = new URL(raw);
+    const queryCandidates = [
+      parsed.searchParams.get("ep"),
+      parsed.searchParams.get("episode"),
+      parsed.searchParams.get("episodio"),
+      parsed.searchParams.get("e"),
+    ];
+    for (const candidate of queryCandidates) {
+      const fromQuery = parseEpisodeCandidate(candidate);
+      if (fromQuery != null) return fromQuery;
+    }
+
+    const pathname = decodeURIComponent(parsed.pathname ?? "");
+    const fromPathToken = pathname.match(/(?:episodio|episode|ep)[-_/ ]*(\d{1,4})(?:\b|$)/i);
+    if (fromPathToken) {
+      return parseEpisodeCandidate(fromPathToken[1]);
+    }
+
+    const segments = pathname.split("/").filter(Boolean);
+    const lastSegment = segments.length > 0 ? segments[segments.length - 1] : "";
+    if (lastSegment) {
+      const fromLastSegment = parseEpisodeCandidate(lastSegment);
+      if (fromLastSegment != null && /^\d{1,4}$/.test(lastSegment)) {
+        return fromLastSegment;
+      }
+    }
+  } catch {
+    // ignore URL parse errors
+  }
+
+  return null;
+}
+
 export function enqueueDownloads(animeId: string, episodes: number[], season = 1, sourceUrl?: string): QueueJob[] {
   const maxConcurrent = getConfigInt("max_concurrent", 3, 1, 10);
   const quality = getConfig("quality") || "1080p";
@@ -992,8 +1096,23 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
 
   const createdJobIds: string[] = [];
   let skippedCount = 0;
+  const inferredEpisode = episodes.length === 1 ? inferEpisodeFromSourceUrl(sourceUrl) : null;
 
   for (const ep of episodes) {
+    const effectiveEpisode = inferredEpisode ?? ep;
+    if (inferredEpisode != null && inferredEpisode !== ep) {
+      logger.warn(
+        "downloader",
+        JSON.stringify({
+          event: "enqueue_episode_adjusted",
+          animeId,
+          requestedEpisode: ep,
+          adjustedEpisode: inferredEpisode,
+          sourceUrl,
+        })
+      );
+    }
+
     const existing = db.query<{
       id: string;
       status: DownloadStatus;
@@ -1003,7 +1122,7 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
        WHERE anime_id = ? AND episode_number = ? AND season = ? AND status IN ('queued','downloading','retry_wait')
        ORDER BY rowid DESC
        LIMIT 1`
-    ).get(animeId, ep, season);
+    ).get(animeId, effectiveEpisode, season);
 
     if (existing) {
       skippedCount += 1;
@@ -1014,7 +1133,7 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
     insert.run({
       $id: id,
       $animeId: animeId,
-      $ep: ep,
+      $ep: effectiveEpisode,
       $season: season,
       $provider: provider,
       $quality: quality,
@@ -1022,11 +1141,11 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
       $maxAttempts: maxAttempts,
     });
 
-    insEp.run(randomUUID(), animeId, ep, season);
+    insEp.run(randomUUID(), animeId, effectiveEpisode, season);
 
     const startIndex = createdJobIds.length;
     const delay = Math.floor(startIndex / maxConcurrent) * 1000 + (startIndex % maxConcurrent) * 300;
-    scheduleStart(id, animeId, ep, season, sourceUrl ?? null, delay);
+    scheduleStart(id, animeId, effectiveEpisode, season, sourceUrl ?? null, delay);
 
     createdJobIds.push(id);
   }

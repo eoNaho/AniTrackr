@@ -1,7 +1,7 @@
 import Elysia, { t } from "elysia";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { searchKitsu, getKitsuAnime, kitsuPoster, kitsuYear } from "../services/kitsu.ts";
-import { searchAniList, getAniListAnime, formatAniListAnime, getAiringSchedule } from "../services/anilist.ts";
+import { searchAniList, getAniListAnime, formatAniListAnime, getAiringSchedule, resolveSeriesRootTitle } from "../services/anilist.ts";
 import { jikanSearchAnime, jikanGetEpisode, jikanGetAllEpisodes } from "../services/jikan.ts";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
@@ -248,6 +248,44 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
     logger.info("metadata", `jikan enrich "${anime.title}": ${enriched}/${episodes.length} episódios`);
     return { ok: true, enriched, total: episodes.length };
   }, { params: t.Object({ id: t.String() }) })
+
+  // POST /api/metadata/resolve-series-titles — re-resolve series_title para todos os animes da biblioteca
+  .post("/resolve-series-titles", async () => {
+    const animes = db.query<{ id: string; title: string; title_english: string | null; anilist_id: number | null }, []>(
+      `SELECT id, title, title_english, anilist_id FROM animes WHERE is_tracked = 1 ORDER BY updated_at DESC`
+    ).all();
+
+    let resolved = 0;
+    let failed = 0;
+
+    for (const anime of animes) {
+      try {
+        let seriesTitle: string | null = null;
+
+        if (anime.anilist_id) {
+          const anilistData = await getAniListAnime(anime.anilist_id);
+          if (anilistData) {
+            seriesTitle = resolveSeriesRootTitle(anilistData);
+          }
+        }
+
+        if (!seriesTitle) {
+          const { stripSeasonSuffix } = await import("../services/naming.ts");
+          seriesTitle = stripSeasonSuffix(anime.title_english ?? anime.title);
+        }
+
+        if (seriesTitle) {
+          db.run(`UPDATE animes SET series_title = ? WHERE id = ?`, [seriesTitle, anime.id]);
+          resolved++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+
+    logger.info("metadata", `resolve-series-titles: ${resolved} resolved, ${failed} failed`);
+    return { ok: true, total: animes.length, resolved, failed };
+  })
 
   // POST /api/metadata/save — salva anime novo direto dos dados de busca
   .post("/save", ({ body }) => {

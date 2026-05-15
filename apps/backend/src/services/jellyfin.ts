@@ -9,12 +9,16 @@
  *   <series_dir>/Season NN/episode.nfo — metadata do episódio (nome igual ao mkv)
  */
 
-import { writeFileSync, mkdirSync, existsSync, statSync } from "fs";
-import { join, dirname } from "path";
+import { writeFileSync, mkdirSync, existsSync, statSync, readdirSync } from "fs";
+import { join, dirname, basename } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
-import { seriesDir, seasonDir } from "./naming.ts";
+import { seriesDir, seasonDir, stripSeasonSuffix, sanitize } from "./naming.ts";
 import { jikanGetEpisode } from "./jikan.ts";
+
+function getConfigValue(key: string): string {
+  return db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key)?.value ?? "";
+}
 
 type AnimeRow = {
   id: string; title: string; title_english: string | null; title_romaji: string | null;
@@ -23,7 +27,7 @@ type AnimeRow = {
   kitsu_id: string | null; year: number | null; episode_count: number;
   season_number: number; anilist_status: string; subtype: string;
   poster_url: string | null; cover_url: string | null; local_path: string;
-  episode_length: number | null;
+  episode_length: number | null; series_title: string | null;
 };
 
 type EpisodeRow = {
@@ -53,13 +57,80 @@ function statusToNfo(s: string): string {
   return "Unknown";
 }
 
-function resolveEpisodeNfoPath(videoPath: string, episodeNumber: number): string {
+function normalizeAscii(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+type SeriesPathInput = {
+  title: string;
+  title_english: string | null;
+  year: number | null;
+  local_path: string;
+  series_title?: string | null;
+};
+
+function resolveSeriesRootPath(anime: SeriesPathInput): string {
+  // Usa o mesmo download_path do config que o downloader usa — evita NFO em pasta errada
+  const configDownloadPath = getConfigValue("download_path");
+  const systemFallback = join(process.env.USERPROFILE ?? process.env.HOME ?? "~", "Anime");
+  const baseDir = configDownloadPath || systemFallback;
+
+  // series_title tem o nome base da série resolvido via AniList (ex: "Fire Force").
+  // Garante que o NFO vá para a mesma pasta que o downloader usa.
+  const rawTitle = anime.series_title || (anime.title_english ?? anime.title);
+  const baseTitle = stripSeasonSuffix(rawTitle);
+  const expectedSeriesName = sanitize(baseTitle);
+
+  const rawPath = (anime.local_path ?? "").trim();
+  if (!rawPath) {
+    return join(baseDir, expectedSeriesName);
+  }
+
+  let withoutTrailing = rawPath.replace(/[\\/]+$/, "");
+
+  // Sobe todos os níveis de "Season XX"
+  while (/^season\s+\d{1,3}$/i.test(basename(withoutTrailing))) {
+    const parent = dirname(withoutTrailing);
+    if (parent === withoutTrailing) break;
+    withoutTrailing = parent;
+  }
+
+  const baseName = basename(withoutTrailing);
+
+  // Correspondência exata com o nome esperado (sem ano)
+  if (normalizeAscii(baseName) === normalizeAscii(expectedSeriesName)) {
+    return withoutTrailing;
+  }
+
+  // Pasta já tem formato "Título (Ano)" — é a pasta da série, não duplica
+  if (/^.+\s*\(\d{4}\)$/.test(baseName)) {
+    return withoutTrailing;
+  }
+
+  // local_path aponta para uma pasta base genérica → adiciona pasta da série
+  return join(withoutTrailing, expectedSeriesName);
+}
+
+function resolveEpisodeNfoPath(videoPath: string, episodeNumber: number, season: number): string {
   if (/\.(mkv|mp4|avi|m4v|webm)$/i.test(videoPath)) {
     return videoPath.replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo");
   }
 
   try {
     if (existsSync(videoPath) && statSync(videoPath).isDirectory()) {
+      const mediaFiles = readdirSync(videoPath).filter((entry) => /\.(mkv|mp4|avi|m4v|webm)$/i.test(entry));
+      if (mediaFiles.length === 1) {
+        return join(videoPath, mediaFiles[0].replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo"));
+      }
+
+      const seasonPath = join(videoPath, seasonDir(season));
+      if (existsSync(seasonPath) && statSync(seasonPath).isDirectory()) {
+        return join(seasonPath, `episode-${String(episodeNumber).padStart(2, "0")}.nfo`);
+      }
+
       return join(videoPath, `episode-${String(episodeNumber).padStart(2, "0")}.nfo`);
     }
   } catch {
@@ -154,12 +225,7 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
   };
 
   // local_path pode incluir "Season XX" — tvshow.nfo vai na raiz da série
-  const rawPath = anime.local_path || join(
-    process.env.USERPROFILE ?? process.env.HOME ?? "~",
-    "Anime",
-    seriesDir(anime.title_english ?? anime.title, anime.year)
-  );
-  const serPath = rawPath.replace(/[\\/]Season\s*\d+\s*$/i, "");
+  const serPath = resolveSeriesRootPath(anime);
 
   mkdirSync(serPath, { recursive: true });
 
@@ -199,7 +265,7 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
     const epNfoContent = buildEpisodeNfo(ep, title);
     // NFO tem o mesmo nome que o arquivo de vídeo mas extensão .nfo
     const videoPath = ep.file_path!;
-    const nfoPath = resolveEpisodeNfoPath(videoPath, ep.number);
+    const nfoPath = resolveEpisodeNfoPath(videoPath, ep.number, ep.season);
 
     // Garante que a pasta existe
     try {
@@ -300,7 +366,7 @@ export async function generateSingleEpisodeNfoAsync(
 
     // 3. Grava NFO do episódio (.nfo com mesmo nome do .mkv)
     const title = anime.title_english ?? anime.title;
-    const nfoPath = resolveEpisodeNfoPath(filePath, episodeNumber);
+    const nfoPath = resolveEpisodeNfoPath(filePath, episodeNumber, season);
     mkdirSync(dirname(nfoPath), { recursive: true });
     writeFileSync(nfoPath, buildEpisodeNfo({ ...ep, file_path: filePath }, title), "utf-8");
     logger.info("jellyfin", `episode NFO → ${nfoPath}`);
@@ -308,8 +374,7 @@ export async function generateSingleEpisodeNfoAsync(
     // 4. Cria tvshow.nfo na raiz da série se não existir
     //    Para jellyfin/plex: sobe de Season XX → série
     //    Para simple: já está na pasta da série
-    const episodeDir = dirname(nfoPath);
-    const serPath = /[/\\]Season\s*\d+/i.test(episodeDir) ? dirname(episodeDir) : episodeDir;
+    const serPath = resolveSeriesRootPath(anime);
     const tvshowNfoPath = join(serPath, "tvshow.nfo");
 
     if (!existsSync(tvshowNfoPath)) {
@@ -337,11 +402,12 @@ export async function downloadPosters(animeId: string): Promise<{ poster: boolea
   ).get(animeId);
   if (!anime) throw new Error(`Anime ${animeId} não encontrado`);
 
-  const serPath = anime.local_path || join(
-    process.env.USERPROFILE ?? process.env.HOME ?? "~",
-    "Anime",
-    seriesDir(anime.title_english ?? anime.title, anime.year)
-  );
+  const serPath = resolveSeriesRootPath({
+    title: anime.title,
+    title_english: anime.title_english,
+    year: anime.year,
+    local_path: anime.local_path,
+  });
 
   mkdirSync(serPath, { recursive: true });
 

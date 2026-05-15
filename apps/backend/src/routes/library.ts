@@ -1,9 +1,33 @@
 import Elysia, { t } from "elysia";
 import type { SQLQueryBindings } from "bun:sqlite";
+import { basename, dirname, join } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { scanAnime, scanFullLibrary, renameToJellyfin, getMissingEpisodes } from "../services/scanner.ts";
+import { seriesDir, stripSeasonSuffix } from "../services/naming.ts";
+import { getAniListAnime, resolveSeriesRootTitle } from "../services/anilist.ts";
 import { randomUUID } from "crypto";
+
+/** Resolve e persiste series_title para um anime via AniList (fire-and-forget). */
+async function resolveAndStoreSeriesTitle(animeId: string, anilistId: number | null, fallbackTitle: string): Promise<void> {
+  try {
+    let seriesTitle = stripSeasonSuffix(fallbackTitle);
+
+    if (anilistId) {
+      const anilistData = await getAniListAnime(anilistId);
+      if (anilistData) {
+        seriesTitle = resolveSeriesRootTitle(anilistData);
+      }
+    }
+
+    if (seriesTitle) {
+      db.run(`UPDATE animes SET series_title = ? WHERE id = ? AND (series_title IS NULL OR series_title = '')`, [seriesTitle, animeId]);
+      logger.info("library", `series_title resolved: "${seriesTitle}" for anime ${animeId}`);
+    }
+  } catch (err) {
+    logger.warn("library", `resolveAndStoreSeriesTitle(${animeId}) failed: ${err}`);
+  }
+}
 
 type AnimeRow = {
   id: string; kitsu_id: string | null; anilist_id: number | null; mal_id: number | null;
@@ -106,6 +130,142 @@ function asNullableFiniteNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function normalizeAscii(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function parseSafePositiveInt(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0 || n > 1000) return null;
+  return n;
+}
+
+function parseRomanNumeral(value: string): number | null {
+  const roman = value.trim().toUpperCase();
+  const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
+  let total = 0;
+  let prev = 0;
+  for (let i = roman.length - 1; i >= 0; i -= 1) {
+    const cur = map[roman[i]];
+    if (!cur) return null;
+    if (cur < prev) total -= cur;
+    else total += cur;
+    prev = cur;
+  }
+  if (total <= 0 || total > 100) return null;
+  return total;
+}
+
+const JAPANESE_NUMBER_MAP: Record<string, number> = {
+  ichi: 1,
+  ni: 2,
+  san: 3,
+  yon: 4,
+  shi: 4,
+  go: 5,
+  roku: 6,
+  nana: 7,
+  shichi: 7,
+  hachi: 8,
+  kyu: 9,
+  ku: 9,
+  juu: 10,
+};
+
+function inferSeasonNumber(...candidates: Array<string | null | undefined>): number {
+  for (const rawCandidate of candidates) {
+    if (!rawCandidate) continue;
+    const candidate = normalizeAscii(rawCandidate);
+
+    // "Season 3", "Temporada 3", "3rd Season", "S3", "S03"
+    const direct =
+      candidate.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i)
+      ?? candidate.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
+      ?? candidate.match(/\bs(?:eason)?\s*0?(\d{1,2})\b/i)
+      ?? candidate.match(/\b(\d{1,2})\s*no\s*shou\b/i);
+    if (direct) {
+      const parsed = parseSafePositiveInt(direct[1]);
+      if (parsed != null) return parsed;
+    }
+
+    // "Season III", "Temporada III"
+    const romanWithKeyword = candidate.match(/\b(?:season|temporada)\s*([ivxlc]{1,5})\b/i);
+    if (romanWithKeyword) {
+      const parsed = parseRomanNumeral(romanWithKeyword[1]);
+      if (parsed != null) return parsed;
+    }
+
+    // Algarismo romano solto no final do título: "Overlord III", "Fate/Zero II"
+    // Exige pelo menos II (>=2) para não confundir "I" com a letra
+    const romanSuffix = candidate.match(/\s+(ii|iii|iv|vi{0,3}|ix|xi{0,3}|xii|xiii|xiv|xv)\s*$/i);
+    if (romanSuffix) {
+      const parsed = parseRomanNumeral(romanSuffix[1]);
+      if (parsed != null && parsed >= 2) return parsed;
+    }
+
+    // "Part 2", "Part II", ": Part 2", "- Part 2"
+    const partMatch = candidate.match(/\bpart\s*(\d{1,2})\b/i);
+    if (partMatch) {
+      const parsed = parseSafePositiveInt(partMatch[1]);
+      if (parsed != null) return parsed;
+    }
+    const partRoman = candidate.match(/\bpart\s*([ivxlc]{1,5})\b/i);
+    if (partRoman) {
+      const parsed = parseRomanNumeral(partRoman[1]);
+      if (parsed != null) return parsed;
+    }
+
+    // Japonês: "San no Shou", "Ni no Shou"
+    const japaneseNoShou = candidate.match(/\b([a-z]+)\s+no\s+shou\b/i);
+    if (japaneseNoShou) {
+      const parsed = JAPANESE_NUMBER_MAP[japaneseNoShou[1]];
+      if (parsed != null) return parsed;
+    }
+  }
+
+  return 1;
+}
+
+function resolveAnimeLocalPath(baseOrAnimePath: string, preferredTitle: string, year: number | null): string {
+  let trimmed = baseOrAnimePath.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "";
+
+  // Sobe níveis de "Season XX" até encontrar a pasta raiz da série
+  while (/^season\s+\d{1,3}$/i.test(basename(trimmed))) {
+    const parent = dirname(trimmed);
+    if (parent === trimmed) break;
+    trimmed = parent;
+  }
+
+  const expectedSeriesDir = seriesDir(preferredTitle, year);
+  const baseName = basename(trimmed);
+  const normalizedBase = normalizeAscii(baseName);
+  const normalizedExpected = normalizeAscii(expectedSeriesDir);
+
+  // Correspondência exata
+  if (normalizedBase === normalizedExpected) {
+    return trimmed;
+  }
+
+  // Pasta tem o formato "Título (Ano)" — provável pasta de série com nome diferente
+  // (ex: "Overlord (2015)" ao adicionar "Overlord III (2018)"). Não duplica.
+  if (/^.+\s*\(\d{4}\)$/.test(baseName)) {
+    return trimmed;
+  }
+
+  // Pasta de série sem ano e o título normalizado contém o nome da pasta
+  const normalizedTitle = normalizeAscii(preferredTitle);
+  if (normalizedBase && normalizedTitle.startsWith(normalizedBase)) {
+    return trimmed;
+  }
+
+  return join(trimmed, expectedSeriesDir);
 }
 
 function toSqlBinding(value: unknown): SQLQueryBindings {
@@ -228,16 +388,32 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
     } = body as CreateLibraryPayload;
 
     const titleValue = asString(title, "").trim() || "Untitled";
+    const titleEnglishValue = asNullableString(titleEnglish);
+    const titleRomajiValue = asNullableString(titleRomaji);
+    const titleNativeValue = asNullableString(titleNative);
+    const altTitleValue = asNullableString(altTitle);
+    const synopsisValue = asNullableString(synopsis);
+    const posterUrlValue = asNullableString(posterUrl);
+    const coverUrlValue = asNullableString(coverUrl);
     const providerValue = asString(provider, "animefire");
     const sourceUrlValue = normalizeSourceRef(asNullableString(sourceUrl));
     const kitsuIdValue = asNullableString(kitsuId);
     const anilistIdValue = asNullableFiniteNumber(anilistId);
     const malIdValue = asNullableFiniteNumber(malId);
-    const localPathValue = asString(localPath, "");
     const episodeCountValue = asFiniteNumber(episodeCount, 0);
     const ratingValue = asNullableFiniteNumber(rating);
     const yearValue = asNullableFiniteNumber(year);
-    const seasonNumberValue = asFiniteNumber(seasonNumber, 1);
+    const preferredTitleForPath = titleEnglishValue ?? titleRomajiValue ?? titleValue;
+    const localPathValue = resolveAnimeLocalPath(asString(localPath, ""), preferredTitleForPath, yearValue);
+    const providedSeasonNumber = asFiniteNumber(seasonNumber, 0);
+    const seasonNumberValue = providedSeasonNumber > 0
+      ? providedSeasonNumber
+      : inferSeasonNumber(
+          titleValue,
+          titleEnglishValue,
+          titleRomajiValue,
+          altTitleValue,
+        );
 
     let existing = null as { id: string } | null;
     if (sourceUrlValue) {
@@ -305,15 +481,16 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
              WHEN ? > episode_count THEN ?
              ELSE episode_count
            END,
-           episode_length = COALESCE(episode_length, ?),
-           quality = COALESCE(NULLIF(quality, ''), ?),
-           local_path = CASE
-             WHEN (local_path IS NULL OR local_path = '') AND ? <> '' THEN ?
-             ELSE local_path
-           END,
+            episode_length = COALESCE(episode_length, ?),
+            quality = COALESCE(NULLIF(quality, ''), ?),
+            local_path = CASE
+              WHEN ? <> '' THEN ?
+              ELSE local_path
+            END,
            year = COALESCE(year, ?),
            season_number = CASE
              WHEN season_number IS NULL OR season_number <= 0 THEN ?
+             WHEN ? > season_number THEN ?
              ELSE season_number
            END,
            source_url = COALESCE(NULLIF(source_url, ''), ?),
@@ -322,13 +499,13 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
          WHERE id = ?`,
         [
           titleValue,
-          asNullableString(titleEnglish),
-          asNullableString(titleRomaji),
-          asNullableString(titleNative),
-          asNullableString(altTitle),
-          asNullableString(synopsis),
-          asNullableString(posterUrl),
-          asNullableString(coverUrl),
+          titleEnglishValue,
+          titleRomajiValue,
+          titleNativeValue,
+          altTitleValue,
+          synopsisValue,
+          posterUrlValue,
+          coverUrlValue,
           kitsuIdValue,
           anilistIdValue,
           malIdValue,
@@ -342,6 +519,8 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
           localPathValue,
           yearValue,
           seasonNumberValue,
+          seasonNumberValue,
+          seasonNumberValue,
           sourceUrlValue,
           asString(asciiArt, ""),
           existing.id,
@@ -349,6 +528,8 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       );
 
       logger.info("library", `reused existing "${titleValue}" (id=${existing.id})`);
+      // Resolve series_title via AniList em background (não bloqueia resposta)
+      void resolveAndStoreSeriesTitle(existing.id, anilistIdValue, titleEnglishValue ?? titleValue);
       return { ok: true, id: existing.id, reused: true };
     }
 
@@ -359,13 +540,13 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       anilistIdValue,
       malIdValue,
       titleValue,
-      asNullableString(titleEnglish),
-      asNullableString(titleRomaji),
-      asNullableString(titleNative),
-      asNullableString(altTitle),
-      asNullableString(synopsis),
-      asNullableString(posterUrl),
-      asNullableString(coverUrl),
+      titleEnglishValue,
+      titleRomajiValue,
+      titleNativeValue,
+      altTitleValue,
+      synopsisValue,
+      posterUrlValue,
+      coverUrlValue,
       ratingValue,
       asString(kitsuStatus, "unknown"),
       asString(anilistStatus, "unknown"),
@@ -391,6 +572,8 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, values);
     logger.info("library", `added "${titleValue}" (id=${id})`);
+    // Resolve series_title via AniList em background (não bloqueia resposta)
+    void resolveAndStoreSeriesTitle(id, anilistIdValue, titleEnglishValue ?? titleValue);
     return { ok: true, id };
   })
 

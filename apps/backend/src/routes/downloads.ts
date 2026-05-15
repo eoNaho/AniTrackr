@@ -169,14 +169,16 @@ export const downloadRoutes = new Elysia()
     if (!animeId || !episodes?.length) {
       return { error: "animeId e episodes[] sao obrigatorios" };
     }
-    const anime = db.query<{ id: string; title: string }, [string]>(
-      `SELECT id, title FROM animes WHERE id = ?`
+    logger.info("queue", `request anime=${animeId} episodes=${episodes.join(",")} season=${season ?? "auto"} source=${sourceUrl ?? "-"}`);
+    const anime = db.query<{ id: string; title: string; season_number: number }, [string]>(
+      `SELECT id, title, season_number FROM animes WHERE id = ?`
     ).get(animeId);
     if (!anime) return { error: `Anime "${animeId}" nao encontrado` };
 
-    const jobs = enqueueDownloads(animeId, episodes, season ?? 1, sourceUrl ?? undefined);
+    const effectiveSeason = season ?? anime.season_number ?? 1;
+    const jobs = enqueueDownloads(animeId, episodes, effectiveSeason, sourceUrl ?? undefined);
     broadcastDownloadUpdate({ type: "enqueued", animeId, count: jobs.length, ts: Date.now() });
-    logger.info("queue", `enqueued ${jobs.length} jobs for "${anime.title}"`);
+    logger.info("queue", `enqueued ${jobs.length} jobs for "${anime.title}" (season=${effectiveSeason})`);
     return { ok: true, queued: jobs.length, jobs };
   }, {
     body: t.Object({
@@ -192,10 +194,12 @@ export const downloadRoutes = new Elysia()
     const missing = getMissingEpisodes(animeId);
     if (!missing.length) return { ok: true, message: "Nenhum episodio faltando", queued: 0 };
 
-    const anime = db.query<{ id: string; provider: string; source_url: string | null }, [string]>(
-      `SELECT id, provider, source_url FROM animes WHERE id = ?`
+    const anime = db.query<{ id: string; provider: string; source_url: string | null; season_number: number }, [string]>(
+      `SELECT id, provider, source_url, season_number FROM animes WHERE id = ?`
     ).get(animeId);
     if (!anime) return { error: "Anime nao encontrado" };
+
+    const effectiveSeason = season ?? anime.season_number ?? 1;
 
     const episodeUrlByNumber = new Map<number, string>();
     if (anime.source_url) {
@@ -215,7 +219,7 @@ export const downloadRoutes = new Elysia()
     let totalQueued = 0;
     for (const epNumber of missing) {
       const sourceUrl = episodeUrlByNumber.get(epNumber) ?? anime.source_url ?? undefined;
-      const jobs = enqueueDownloads(animeId, [epNumber], season ?? 1, sourceUrl);
+      const jobs = enqueueDownloads(animeId, [epNumber], effectiveSeason, sourceUrl);
       totalQueued += jobs.length;
     }
 
