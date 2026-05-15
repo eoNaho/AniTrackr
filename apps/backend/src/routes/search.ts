@@ -1,13 +1,13 @@
 import Elysia, { t } from "elysia";
 import { animefireSearch, goyabuSearch, animefireEpisodes, goyabuEpisodes } from "../services/scraper.ts";
 import { searchAllAnime, getAllAnimeEpisodes, getAllAnimeStreamUrl } from "../services/allanime.ts";
-import { searchAllProviders, getEpisodesWithFallback, getProviderInfo } from "../services/provider-chain.ts";
+import { searchAllProviders, getEpisodesWithFallback, getProviderInfo, type Provider } from "../services/provider-chain.ts";
 import { searchKitsu } from "../services/kitsu.ts";
 import { logger } from "../utils/logger.ts";
 
 export const searchRoutes = new Elysia({ prefix: "/search" })
 
-  // GET /api/search?q=&source=kitsu|anilist|animefire|goyabu|allanime|all
+  // GET /api/search?q=&source=kitsu|animefire|goyabu|allanime|nineanime|animedrive|superflix|dattebayo|all
   .get("/", async ({ query }) => {
     const q = query.q?.trim();
     if (!q || q.length < 2) return { error: "Query muito curta" };
@@ -54,9 +54,25 @@ export const searchRoutes = new Elysia({ prefix: "/search" })
         })),
       };
     }
+    if (source === "dattebayo") {
+      const results = await searchAllProviders(q, ["dattebayo"]);
+      return { source: "dattebayo", total: results.length, results };
+    }
+    if (source === "nineanime") {
+      const results = await searchAllProviders(q, ["nineanime"]);
+      return { source: "nineanime", total: results.length, results };
+    }
+    if (source === "animedrive") {
+      const results = await searchAllProviders(q, ["animedrive"]);
+      return { source: "animedrive", total: results.length, results };
+    }
+    if (source === "superflix") {
+      const results = await searchAllProviders(q, ["superflix"]);
+      return { source: "superflix", total: results.length, results };
+    }
 
     // "all" — todos os providers em paralelo
-    const results = await searchAllProviders(q, ["animefire", "goyabu", "allanime"]);
+    const results = await searchAllProviders(q, ["animefire", "goyabu", "allanime", "nineanime", "animedrive", "superflix", "dattebayo"]);
     return { source: "all", total: results.length, results };
   }, {
     query: t.Object({
@@ -68,7 +84,7 @@ export const searchRoutes = new Elysia({ prefix: "/search" })
   // GET /api/search/episodes?url=&provider=&allAnimeId=
   .get("/episodes", async ({ query }) => {
     const url = query.url?.trim();
-    const provider = (query.provider?.trim() ?? "animefire") as "animefire" | "goyabu" | "allanime";
+    const provider = (query.provider?.trim() ?? "animefire") as Provider;
     const allAnimeId = query.allAnimeId?.trim();
 
     if (!url && !allAnimeId) return { error: "url ou allAnimeId é obrigatório" };

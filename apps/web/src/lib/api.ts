@@ -180,6 +180,15 @@ export async function cancelAllDownloads() {
   return response.json() as Promise<{ ok: boolean; cancelled: number }>;
 }
 
+export async function clearQueueMonitor() {
+  const response = await fetch(`${getBackendUrl()}/api/downloads/monitor`, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Clear queue monitor failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; removed: number; remaining: number }>;
+}
+
 export async function retryDownloadById(id: string) {
   const response = await fetch(`${getBackendUrl()}/api/downloads/${id}/retry`, {
     method: "POST",
@@ -342,6 +351,68 @@ export async function saveConfig(data: Record<string, string>) {
   });
   if (!response.ok) throw new Error(`Config save failed: ${response.status}`);
   return response.json() as Promise<{ ok: boolean; updated: string[] }>;
+}
+
+export type ProviderHealthEntry = {
+  state: "closed" | "open" | "half-open";
+  failures: number;
+  lastFailureAt: string;
+  lastSuccessAt: string;
+};
+
+export async function fetchProviderHealth() {
+  return requestJson<{ providers: Record<string, ProviderHealthEntry> }>("/api/providers/health");
+}
+
+export async function resetProviderCircuit(name: string) {
+  const response = await fetch(`${getBackendUrl()}/api/providers/${name}/reset`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Reset circuit failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; message: string }>;
+}
+
+export type QbtConnectionStatus = {
+  enabled: boolean;
+  connected?: boolean;
+  ok?: boolean;
+  version?: string;
+  error?: string;
+};
+
+export async function testQbtConnection() {
+  return requestJson<QbtConnectionStatus>("/api/torrent/status");
+}
+
+export async function searchNyaa(params: { q: string; category?: string; group?: string; resolution?: string; limit?: number }) {
+  const p = new URLSearchParams({ q: params.q });
+  if (params.category) p.set("category", params.category);
+  if (params.group) p.set("group", params.group);
+  if (params.resolution) p.set("resolution", params.resolution);
+  if (params.limit) p.set("limit", String(params.limit));
+  return requestJson<{
+    results: { id: string; title: string; magnetLink: string; torrentUrl: string; size: string; seeders: number; leechers: number; group: string; resolution: string; infoHash: string }[];
+    total: number;
+    query: string;
+  }>(`/api/nyaa/search?${p.toString()}`);
+}
+
+export async function addTorrent(payload: {
+  magnetLink?: string;
+  torrentUrl?: string;
+  animeId?: string;
+  episodeNumber?: number;
+  season?: number;
+  infoHash?: string;
+}) {
+  const response = await fetch(`${getBackendUrl()}/api/torrent/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Add torrent failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; jobId?: string; error?: string }>;
 }
 
 export async function enqueueEpisodes(payload: {

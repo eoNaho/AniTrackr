@@ -7,8 +7,9 @@ import { libraryRoutes } from "./routes/library.ts";
 import { configRoutes } from "./routes/config.ts";
 import { jellyfinRoutes } from "./routes/jellyfin.ts";
 import { subtitleRoutes } from "./routes/subtitles.ts";
+import { torrentRoutes, startTorrentMonitor, restoreTorrentMonitors } from "./routes/torrent.ts";
 import { logger } from "./utils/logger.ts";
-import "./db/index.ts";
+import { DB_FILE, DATA_ROOT } from "./db/index.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3001");
 
@@ -40,6 +41,7 @@ const app = new Elysia()
       .use(configRoutes)
       .use(jellyfinRoutes)
       .use(subtitleRoutes)
+      .use(torrentRoutes)
   )
 
   .onError(({ code, error, request }) => {
@@ -62,35 +64,30 @@ const app = new Elysia()
 
   .listen(PORT);
 
+// Inicia monitoramento de torrents ativos
+restoreTorrentMonitors();
+startTorrentMonitor();
+
 logger.info("app", `╔══════════════════════════════════════════════════╗`);
-logger.info("app", `║  GoAnime Tracker Backend v2.0.1                  ║`);
+logger.info("app", `║  GoAnime Tracker Backend v2.1.0                  ║`);
 logger.info("app", `║  http://localhost:${PORT}                            ║`);
 logger.info("app", `╚══════════════════════════════════════════════════╝`);
+logger.info("app", `DB FILE: ${DB_FILE}`);
+logger.info("app", `DATA ROOT: ${DATA_ROOT}`);
 logger.info("app", `Rotas:`);
-logger.info("app", `  SEARCH  /api/search?q=&source=all|animefire|goyabu|allanime|kitsu`);
-logger.info("app", `  SEARCH  /api/search/episodes?url=&provider=&allAnimeId=`);
-logger.info("app", `  SEARCH  /api/search/stream?allAnimeId=&episode=&mode=sub&quality=best`);
-logger.info("app", `  SEARCH  /api/search/providers`);
-logger.info("app", `  META    /api/metadata/search?q=&source=anilist|kitsu|all`);
-logger.info("app", `  META    /api/metadata/anilist/:id   /api/metadata/anilist/:id/airing`);
-logger.info("app", `  META    /api/metadata/kitsu/:id`);
-logger.info("app", `  META    /api/metadata/enrich/:id  (POST)`);
-logger.info("app", `  LIB     /api/library  [GET/POST]   /api/library/stats/summary`);
-logger.info("app", `  LIB     /api/library/:id  [GET/PATCH/DELETE]`);
-logger.info("app", `  LIB     /api/library/:id/episodes  [GET/PATCH]`);
-logger.info("app", `  LIB     /api/library/:id/scan  (POST)`);
-logger.info("app", `  LIB     /api/library/scan/all  (POST)`);
-logger.info("app", `  LIB     /api/library/:id/rename?dry=true  (POST)`);
-logger.info("app", `  DL      /api/downloads  [GET]   /api/downloads/stats`);
-logger.info("app", `  DL      /api/downloads/stream  (SSE — progresso em tempo real)`);
-logger.info("app", `  DL      /api/queue  (POST)   /api/queue/missing  (POST)`);
-logger.info("app", `  DL      /api/queue/missing-all  (POST)`);
-logger.info("app", `  DL      /api/downloads/:id  (DELETE)   /api/downloads/all  (DELETE)`);
-logger.info("app", `  JF      /api/jellyfin/nfo/:id  (POST)   /api/jellyfin/nfo/all  (POST)`);
-logger.info("app", `  JF      /api/jellyfin/posters/:id  (POST)`);
-logger.info("app", `  SUB     /api/subtitles/search?q=&season=&episode=&languages=`);
-logger.info("app", `  SUB     /api/subtitles/download  (POST)`);
-logger.info("app", `  SUB     /api/subtitles/auto  (POST)   /api/subtitles/auto-all  (POST)`);
+logger.info("app", `  SEARCH  /api/search?q=&source=all|animefire|goyabu|allanime|nineanime|animedrive|superflix|dattebayo|kitsu`);
+logger.info("app", `  SEARCH  /api/search/episodes   /api/search/stream   /api/search/providers`);
+logger.info("app", `  META    /api/metadata/search   /api/metadata/enrich/:id`);
+logger.info("app", `  META    /api/metadata/jikan/search   /api/metadata/jikan/:malId/episodes`);
+logger.info("app", `  META    /api/metadata/jikan/enrich/:id  (POST — filler/recap detection)`);
+logger.info("app", `  LIB     /api/library  [GET/POST]   /api/library/:id  [GET/PATCH/DELETE]`);
+logger.info("app", `  DL      /api/downloads  [GET/SSE]   /api/queue  [POST]`);
+logger.info("app", `  NYAA    /api/nyaa/search?q=&category=&group=&resolution=`);
+logger.info("app", `  TORRENT /api/torrent/status   /api/torrent/list   /api/torrent/add  (POST)`);
+logger.info("app", `  TORRENT /api/torrent/:hash/pause|resume   DELETE /api/torrent/:hash`);
+logger.info("app", `  HEALTH  /api/providers/health   POST /api/providers/:name/reset`);
+logger.info("app", `  JF      /api/jellyfin/nfo/:id   /api/jellyfin/posters/:id`);
+logger.info("app", `  SUB     /api/subtitles/search   /api/subtitles/auto`);
 logger.info("app", `  CFG     /api/config  [GET/POST]   /api/config/:key  [GET/PUT]`);
 
 export type App = typeof app;

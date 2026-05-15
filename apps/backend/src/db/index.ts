@@ -6,9 +6,12 @@ const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
 const dataRoot = process.env.GOANIME_DATA_DIR?.trim() || home;
 const defaultDownloadPath = process.env.GOANIME_DOWNLOAD_PATH?.trim() || join(home, "Anime");
 const dbDir = join(dataRoot, ".goanime");
+const dbFile = join(dbDir, "tracker.db");
 mkdirSync(dbDir, { recursive: true });
 
-export const db = new Database(join(dbDir, "tracker.db"), { create: true });
+export const DB_FILE = dbFile;
+export const DATA_ROOT = dataRoot;
+export const db = new Database(dbFile, { create: true });
 
 db.run(`PRAGMA journal_mode = WAL`);
 db.run(`PRAGMA foreign_keys = ON`);
@@ -120,6 +123,10 @@ ensureColumn("downloads", "attempt_count", "attempt_count INTEGER DEFAULT 0");
 ensureColumn("downloads", "max_attempts", "max_attempts INTEGER DEFAULT 3");
 ensureColumn("downloads", "next_retry_at", "next_retry_at TEXT");
 ensureColumn("downloads", "last_error_code", "last_error_code TEXT");
+ensureColumn("downloads", "download_type", "download_type TEXT DEFAULT 'ytdlp'");
+ensureColumn("downloads", "torrent_hash", "torrent_hash TEXT");
+ensureColumn("downloads", "magnet_link", "magnet_link TEXT");
+ensureColumn("animes", "mal_id", "mal_id INTEGER");
 
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_retry_at ON downloads(next_retry_at)`);
@@ -154,7 +161,7 @@ const defaultConfig: Record<string, string> = {
   provider:         "animefire",
   max_concurrent:   "3",
   language:         "pt-BR",
-  naming_scheme:    "jellyfin",   // jellyfin | plex | simple
+  naming_scheme:    "jellyfin",
   prefer_sub:       "true",
   allow_simulated_downloads: "true",
   yt_dlp_path:      "yt-dlp",
@@ -163,193 +170,22 @@ const defaultConfig: Record<string, string> = {
   retry_max_attempts: "3",
   retry_base_delay_seconds: "20",
   retry_max_delay_seconds: "900",
+  // qBittorrent
+  qbittorrent_enabled:  "false",
+  qbittorrent_host:     "http://localhost:8080",
+  qbittorrent_username: "admin",
+  qbittorrent_password: "adminadmin",
+  qbittorrent_save_path: "",
+  // Nyaa.si
+  nyaa_preferred_group:      "SubsPlease",
+  nyaa_preferred_resolution: "1080p",
+  nyaa_default_category:     "1_2",
 };
 
 const insertCfg = db.prepare(`INSERT OR IGNORE INTO config (key, value) VALUES ($k, $v)`);
 for (const [k, v] of Object.entries(defaultConfig)) {
   insertCfg.run({ $k: k, $v: v });
 }
-// Força allow_simulated_downloads=true em bancos existentes que tinham false
-db.run(`UPDATE config SET value = 'true' WHERE key = 'allow_simulated_downloads' AND value = 'false'`);
-
-// ── seed mock data ─────────────────────────────────────────────────────────
-function seedMockAnimes() {
-  const { count } = db.query<{ count: number }, []>(`SELECT COUNT(*) as count FROM animes`).get()!;
-  if (count > 0) return;
-
-  const ins = db.prepare(`
-    INSERT OR IGNORE INTO animes (
-      id, kitsu_id, anilist_id, title, title_english, title_romaji,
-      alt_title, synopsis, genres, tags, rating, kitsu_status, anilist_status,
-      subtype, episode_count, episode_length, downloaded_count, download_status,
-      quality, provider, size_gb, local_path, year, season_number,
-      next_release, last_download, ascii_art
-    ) VALUES (
-      $id, $kitsu_id, $anilist_id, $title, $title_english, $title_romaji,
-      $alt_title, $synopsis, $genres, $tags, $rating, $kitsu_status, $anilist_status,
-      $subtype, $episode_count, $episode_length, $downloaded_count, $download_status,
-      $quality, $provider, $size_gb, $local_path, $year, $season_number,
-      $next_release, $last_download, $ascii_art
-    )
-  `);
-
-  const seed = [
-    {
-      $id: "frieren-s01", $kitsu_id: "46065", $anilist_id: 154587,
-      $title: "Sousou no Frieren", $title_english: "Frieren: Beyond Journey's End", $title_romaji: "Sousou no Frieren",
-      $alt_title: "Frieren: Beyond Journey's End",
-      $synopsis: "Tracker local de episódios baixados. Frieren possui 24 episódios salvos, 4 pendentes e 1 lançamento previsto para hoje.",
-      $genres: JSON.stringify(["Adventure", "Drama", "Fantasy"]),
-      $tags: JSON.stringify(["Adventure", "Drama", "Fantasy", "Magic"]),
-      $rating: 9.2, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 28, $episode_length: 24,
-      $downloaded_count: 24, $download_status: "Downloading",
-      $quality: "1080p HEVC", $provider: "animefire", $size_gb: 18.4,
-      $local_path: join(home, "Anime", "Sousou no Frieren (2023)", "Season 01"),
-      $year: 2023, $season_number: 1,
-      $next_release: "Hoje, 23:00", $last_download: "Hoje, 14:22",
-      $ascii_art: "   /\\_\\\n  ( o.o )\n   > ^ <\n  /  _  \\\n /_| |_\\_\\",
-    },
-    {
-      $id: "solo-leveling-s01", $kitsu_id: "43860", $anilist_id: 166240,
-      $title: "Solo Leveling", $title_english: "Solo Leveling", $title_romaji: "Ore dake Level Up na Ken",
-      $alt_title: "Ore dake Level Up na Ken",
-      $synopsis: "Série na fila para completar a temporada. O tracker detectou 4 episódios faltando e mantém os metadados sincronizados.",
-      $genres: JSON.stringify(["Action", "Dark Fantasy", "Adventure"]),
-      $tags: JSON.stringify(["Action", "System", "Dark Fantasy", "OP MC"]),
-      $rating: 8.5, $kitsu_status: "current", $anilist_status: "RELEASING",
-      $subtype: "TV", $episode_count: 12, $episode_length: 22,
-      $downloaded_count: 8, $download_status: "Queued",
-      $quality: "1080p AVC", $provider: "animefire", $size_gb: 9.1,
-      $local_path: join(home, "Anime", "Solo Leveling (2024)", "Season 01"),
-      $year: 2024, $season_number: 1,
-      $next_release: "Sábado", $last_download: "Ontem, 22:10",
-      $ascii_art: "   /| ________________\n O|===|* >________________>\n   \\|",
-    },
-    {
-      $id: "jjk-s02", $kitsu_id: "43608", $anilist_id: 145064,
-      $title: "Jujutsu Kaisen 2nd Season", $title_english: "Jujutsu Kaisen Season 2", $title_romaji: "Jujutsu Kaisen 2nd Season",
-      $alt_title: "JJK S2: Shibuya Incident",
-      $synopsis: "Temporada completa no disco. Nenhum episódio faltando, pronto para backup, exportação ou rescan da biblioteca.",
-      $genres: JSON.stringify(["Action", "Supernatural", "School"]),
-      $tags: JSON.stringify(["Action", "Supernatural", "Gore", "Cursed Energy"]),
-      $rating: 9.5, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 47, $episode_length: 23,
-      $downloaded_count: 47, $download_status: "Downloaded",
-      $quality: "1080p HEVC", $provider: "animefire", $size_gb: 31.8,
-      $local_path: join(home, "Anime", "Jujutsu Kaisen (2023)", "Season 02"),
-      $year: 2023, $season_number: 2,
-      $next_release: null, $last_download: "11 Maio",
-      $ascii_art: "   ///\\\\\n  | 0 0 |\n   \\_-_/\n   /|||\\",
-    },
-    {
-      $id: "dungeon-meshi-s01", $kitsu_id: "44578", $anilist_id: 153518,
-      $title: "Dungeon Meshi", $title_english: "Delicious in Dungeon", $title_romaji: "Dungeon Meshi",
-      $alt_title: "Delicious in Dungeon",
-      $synopsis: "Download incompleto. O tracker encontrou episódios ausentes entre o 12 e o 24 e sugere um batch download.",
-      $genres: JSON.stringify(["Comedy", "Fantasy", "Adventure"]),
-      $tags: JSON.stringify(["Comedy", "Fantasy", "Food", "Dungeon"]),
-      $rating: 9.0, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 24, $episode_length: 24,
-      $downloaded_count: 11, $download_status: "Missing",
-      $quality: "720p AVC", $provider: "goyabu", $size_gb: 7.6,
-      $local_path: join(home, "Anime", "Dungeon Meshi (2024)", "Season 01"),
-      $year: 2024, $season_number: 1,
-      $next_release: "Quinta-feira", $last_download: "Segunda, 19:40",
-      $ascii_art: "   ( )\n  (   )\n (_____)\n  |___|",
-    },
-    {
-      $id: "vinland-s02", $kitsu_id: "45891", $anilist_id: 136430,
-      $title: "Vinland Saga Season 2", $title_english: "Vinland Saga Season 2", $title_romaji: "Vinland Saga Season 2",
-      $alt_title: "Farmland Arc",
-      $synopsis: "Download pausado manualmente. Ainda faltam 10 episódios para fechar a temporada local.",
-      $genres: JSON.stringify(["Historical", "Drama", "Action"]),
-      $tags: JSON.stringify(["Historical", "Drama", "Seinen", "Vikings"]),
-      $rating: 9.7, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 24, $episode_length: 23,
-      $downloaded_count: 14, $download_status: "Paused",
-      $quality: "1080p AVC", $provider: "animefire", $size_gb: 13.2,
-      $local_path: join(home, "Anime", "Vinland Saga (2023)", "Season 02"),
-      $year: 2023, $season_number: 2,
-      $next_release: null, $last_download: "08 Maio",
-      $ascii_art: "  /\\____/\\\n /  o  o  \\\n \\  --   /\n  /|____|\\",
-    },
-    {
-      $id: "oshi-no-ko-s01", $kitsu_id: "44491", $anilist_id: 150672,
-      $title: "Oshi no Ko", $title_english: "Oshi no Ko", $title_romaji: "Oshi no Ko",
-      $alt_title: "My Star",
-      $synopsis: "Idol reincarnation story. Download completo da primeira temporada com 11 episódios.",
-      $genres: JSON.stringify(["Drama", "Mystery", "Supernatural"]),
-      $tags: JSON.stringify(["Idol", "Reincarnation", "Drama", "Mystery"]),
-      $rating: 8.9, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 11, $episode_length: 45,
-      $downloaded_count: 11, $download_status: "Downloaded",
-      $quality: "1080p HEVC", $provider: "animefire", $size_gb: 12.3,
-      $local_path: join(home, "Anime", "Oshi no Ko (2023)", "Season 01"),
-      $year: 2023, $season_number: 1,
-      $next_release: null, $last_download: "25 Abril",
-      $ascii_art: "   ★彡\n  (◕‿◕)\n  /|  |\\\n   |  |",
-    },
-    {
-      $id: "chainsaw-s01", $kitsu_id: "42522", $anilist_id: 127230,
-      $title: "Chainsaw Man", $title_english: "Chainsaw Man", $title_romaji: "Chainsaw Man",
-      $alt_title: "CSM",
-      $synopsis: "Shonen de ação e horror. Temporada 1 completa no disco local.",
-      $genres: JSON.stringify(["Action", "Horror", "Supernatural"]),
-      $tags: JSON.stringify(["Action", "Horror", "Demons", "Dark"]),
-      $rating: 8.7, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 12, $episode_length: 24,
-      $downloaded_count: 12, $download_status: "Downloaded",
-      $quality: "1080p HEVC", $provider: "animefire", $size_gb: 9.8,
-      $local_path: join(home, "Anime", "Chainsaw Man (2022)", "Season 01"),
-      $year: 2022, $season_number: 1,
-      $next_release: null, $last_download: "03 Março",
-      $ascii_art: "  /|\n  ||----\n  ||VROOM\n  \\|",
-    },
-    {
-      $id: "spy-family-s01", $kitsu_id: "44511", $anilist_id: 142838,
-      $title: "SPY×FAMILY", $title_english: "SPY×FAMILY", $title_romaji: "Spy x Family",
-      $alt_title: "Spy Family",
-      $synopsis: "Comédia de espionagem familiar. Baixando segunda parte da primeira temporada.",
-      $genres: JSON.stringify(["Comedy", "Action", "Slice of Life"]),
-      $tags: JSON.stringify(["Spy", "Family", "Comedy", "Esper"]),
-      $rating: 8.6, $kitsu_status: "finished", $anilist_status: "FINISHED",
-      $subtype: "TV", $episode_count: 25, $episode_length: 24,
-      $downloaded_count: 13, $download_status: "Missing",
-      $quality: "1080p AVC", $provider: "goyabu", $size_gb: 10.1,
-      $local_path: join(home, "Anime", "SPY×FAMILY (2022)", "Season 01"),
-      $year: 2022, $season_number: 1,
-      $next_release: null, $last_download: "18 Abril",
-      $ascii_art: "  (>_<)\n  /|★|\\\n   |  |\n  / \\/ \\",
-    },
-  ];
-
-  for (const row of seed) {
-    ins.run(row as Parameters<typeof ins.run>[0]);
-  }
-
-  // Seed alguns episódios para o Frieren
-  const insEp = db.prepare(`
-    INSERT OR IGNORE INTO episodes (id, anime_id, number, season, title, status, file_path)
-    VALUES ($id, $anime_id, $number, $season, $title, $status, $file_path)
-  `);
-
-  for (let ep = 1; ep <= 28; ep++) {
-    const downloaded = ep <= 24;
-    insEp.run({
-      $id: `frieren-s01-ep${ep}`,
-      $anime_id: "frieren-s01",
-      $number: ep,
-      $season: 1,
-      $title: `Episode ${ep}`,
-      $status: downloaded ? "downloaded" : "missing",
-      $file_path: downloaded
-        ? join(home, "Anime", "Sousou no Frieren (2023)", "Season 01", `Sousou no Frieren S01E${String(ep).padStart(2,"0")}.mkv`)
-        : "",
-    });
-  }
-}
-
-seedMockAnimes();
+// Nao sobrescreve valores ja configurados no banco.
 
 export default db;

@@ -302,4 +302,17 @@ export const downloadRoutes = new Elysia()
     }
     logger.info("queue", `cancelled all: ${cancelled} jobs`);
     return { ok: true, cancelled };
+  })
+
+  .delete("/downloads/monitor", () => {
+    const before = db.query<{ count: number }, []>(
+      `SELECT COUNT(*) as count FROM downloads WHERE status IN ('completed','failed','cancelled')`
+    ).get()?.count ?? 0;
+
+    db.run(`DELETE FROM downloads WHERE status IN ('completed','failed','cancelled')`);
+
+    const jobs = getAllDownloads();
+    broadcastDownloadUpdate({ type: "snapshot", jobs, ts: Date.now() });
+    logger.info("queue", `monitor cleanup: removed ${before} finalized jobs`);
+    return { ok: true, removed: before, remaining: jobs.length };
   });

@@ -1,9 +1,37 @@
 import Elysia, { t } from "elysia";
+import type { SQLQueryBindings } from "bun:sqlite";
 import { searchKitsu, getKitsuAnime, kitsuPoster, kitsuYear } from "../services/kitsu.ts";
 import { searchAniList, getAniListAnime, formatAniListAnime, getAiringSchedule } from "../services/anilist.ts";
+import { jikanSearchAnime, jikanGetEpisode, jikanGetAllEpisodes } from "../services/jikan.ts";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { randomUUID } from "crypto";
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function asFiniteNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function asNullableFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
 
 export const metadataRoutes = new Elysia({ prefix: "/metadata" })
 
@@ -163,15 +191,113 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
     return { ok: true, anilistId: formatted.anilistId, title: formatted.title };
   }, { params: t.Object({ id: t.String() }) })
 
+  // GET /api/metadata/jikan/search?q=
+  .get("/jikan/search", async ({ query }) => {
+    const q = (query as any).q?.trim();
+    if (!q) return { error: "q é obrigatório" };
+    const results = await jikanSearchAnime(q);
+    return { results };
+  })
+
+  // GET /api/metadata/jikan/:malId/episodes
+  .get("/jikan/:malId/episodes", async ({ params }) => {
+    const malId = parseInt(params.malId);
+    if (isNaN(malId)) return { error: "malId inválido" };
+    const episodes = await jikanGetAllEpisodes(malId);
+    return { malId, total: episodes.length, episodes };
+  }, { params: t.Object({ malId: t.String() }) })
+
+  // GET /api/metadata/jikan/:malId/episode/:ep
+  .get("/jikan/:malId/episode/:ep", async ({ params }) => {
+    const malId = parseInt(params.malId);
+    const ep = parseInt(params.ep);
+    if (isNaN(malId) || isNaN(ep)) return { error: "parâmetros inválidos" };
+    const episode = await jikanGetEpisode(malId, ep);
+    if (!episode) return { error: "Episódio não encontrado no Jikan" };
+    return episode;
+  }, { params: t.Object({ malId: t.String(), ep: t.String() }) })
+
+  // POST /api/metadata/jikan/enrich/:id — sincroniza episódios da biblioteca com dados Jikan
+  .post("/jikan/enrich/:id", async ({ params }) => {
+    const anime = db.query<{ id: string; title: string; mal_id: number | null }, [string]>(
+      `SELECT id, title, mal_id FROM animes WHERE id = ?`
+    ).get(params.id);
+    if (!anime) return { error: "Anime não encontrado" };
+    if (!anime.mal_id) return { error: "Anime não possui mal_id. Enriqueça com AniList primeiro." };
+
+    const episodes = await jikanGetAllEpisodes(anime.mal_id);
+    if (!episodes.length) return { ok: true, enriched: 0, message: "Nenhum episódio retornado pelo Jikan" };
+
+    const update = db.prepare(
+      `UPDATE episodes
+       SET title=COALESCE(NULLIF(title,''),?), synopsis=COALESCE(NULLIF(synopsis,''),?),
+           aired=COALESCE(NULLIF(aired,''),?), is_filler=?, is_recap=?
+       WHERE anime_id=? AND number=?`
+    );
+
+    let enriched = 0;
+    for (const ep of episodes) {
+      const res = update.run(
+        ep.title || null, ep.synopsis || null, ep.aired || null,
+        ep.isFiller ? 1 : 0, ep.isRecap ? 1 : 0,
+        anime.id, ep.number
+      );
+      if (res.changes > 0) enriched++;
+    }
+
+    logger.info("metadata", `jikan enrich "${anime.title}": ${enriched}/${episodes.length} episódios`);
+    return { ok: true, enriched, total: episodes.length };
+  }, { params: t.Object({ id: t.String() }) })
+
   // POST /api/metadata/save — salva anime novo direto dos dados de busca
   .post("/save", ({ body }) => {
     const {
       kitsuId, anilistId, malId, title, titleEnglish, titleRomaji,
       synopsis, posterUrl, rating, status, episodeCount, year, tags, genres,
       provider, sourceUrl, subtype,
-    } = body as Record<string, unknown>;
+    } = body as {
+      kitsuId?: unknown;
+      anilistId?: unknown;
+      malId?: unknown;
+      title?: unknown;
+      titleEnglish?: unknown;
+      titleRomaji?: unknown;
+      synopsis?: unknown;
+      posterUrl?: unknown;
+      rating?: unknown;
+      status?: unknown;
+      episodeCount?: unknown;
+      year?: unknown;
+      tags?: unknown;
+      genres?: unknown;
+      provider?: unknown;
+      sourceUrl?: unknown;
+      subtype?: unknown;
+    };
 
     const id = randomUUID();
+    const titleValue = asString(title, "").trim() || "Untitled";
+    const values: SQLQueryBindings[] = [
+      id,
+      asNullableString(kitsuId),
+      asNullableFiniteNumber(anilistId),
+      asNullableFiniteNumber(malId),
+      titleValue,
+      asNullableString(titleEnglish),
+      asNullableString(titleRomaji),
+      asNullableString(synopsis),
+      asNullableString(posterUrl),
+      asNullableFiniteNumber(rating),
+      asString(status, "unknown"),
+      asString(status, "unknown"),
+      asFiniteNumber(episodeCount, 0),
+      asNullableFiniteNumber(year),
+      Array.isArray(tags) ? JSON.stringify(tags) : "[]",
+      Array.isArray(genres) ? JSON.stringify(genres) : "[]",
+      asString(provider, "animefire"),
+      asNullableString(sourceUrl),
+      asString(subtype, "TV"),
+    ];
     db.run(`
       INSERT INTO animes (
         id, kitsu_id, anilist_id, mal_id, title, title_english, title_romaji,
@@ -179,17 +305,8 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
         episode_count, year, tags, genres, provider, source_url, subtype
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO NOTHING
-    `, [
-      id, kitsuId ?? null, anilistId ?? null, malId ?? null,
-      title, titleEnglish ?? null, titleRomaji ?? null,
-      synopsis ?? null, posterUrl ?? null, rating ?? null,
-      status ?? "unknown", status ?? "unknown",
-      episodeCount ?? 0, year ?? null,
-      Array.isArray(tags) ? JSON.stringify(tags) : "[]",
-      Array.isArray(genres) ? JSON.stringify(genres) : "[]",
-      provider ?? "animefire", sourceUrl ?? null, subtype ?? "TV",
-    ]);
+    `, values);
 
-    logger.info("metadata", `saved "${title}"`);
+    logger.info("metadata", `saved "${titleValue}"`);
     return { ok: true, id };
   });

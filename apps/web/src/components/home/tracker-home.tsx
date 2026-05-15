@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  clearQueueMonitor,
   cancelAllDownloads,
   cancelDownloadById,
   createLibraryAnime,
@@ -35,6 +36,7 @@ import {
 import { AnimeView } from "./ui";
 import { LibraryView } from "./library-view";
 import { SearchView } from "./search-view";
+import { SettingsView } from "./settings-view";
 
 function fmtGb(v: number) {
   return `${v.toFixed(1)} GB`;
@@ -63,7 +65,7 @@ function mapAnime(a: LibraryAnime): AnimeView {
   };
 }
 
-type Mode = "library" | "search";
+type Mode = "library" | "search" | "settings";
 type LogEntry = { time: string; module: string; text: string };
 type StreamState = "connecting" | "live" | "fallback";
 
@@ -249,7 +251,7 @@ export function TrackerHome() {
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "Tab") {
         e.preventDefault();
-        setMode((m) => (m === "library" ? "search" : "library"));
+        setMode((m) => m === "library" ? "search" : m === "search" ? "settings" : "library");
         return;
       }
       if (mode !== "library") return;
@@ -434,6 +436,16 @@ export function TrackerHome() {
     }
   }
 
+  async function handleClearQueueMonitor() {
+    try {
+      const res = await clearQueueMonitor();
+      pushLog("queue", `monitor limpo: removidos ${res.removed}`);
+      await refreshDownloads();
+    } catch (e) {
+      pushLog("queue", `clear-monitor erro: ${(e as Error).message}`);
+    }
+  }
+
   async function handleSearch() {
     if (searchQuery.trim().length < 2) return;
     setIsBusy(true);
@@ -578,7 +590,7 @@ export function TrackerHome() {
           </div>
 
           <nav className="flex gap-1">
-            {(["library", "search"] as Mode[]).map((m) => (
+            {(["library", "search", "settings"] as Mode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -588,7 +600,7 @@ export function TrackerHome() {
                     : "border-[#45475a] text-[#6c7086] hover:border-[#cba6f7] hover:text-[#cba6f7]"
                 }`}
               >
-                [{m}]
+                [{m === "settings" ? "⚙ config" : m}]
               </button>
             ))}
           </nav>
@@ -624,7 +636,7 @@ export function TrackerHome() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-5">
-          {mode === "library" ? (
+          {mode === "library" && (
             <LibraryView
               animes={animes}
               selectedIndex={selectedIndex}
@@ -647,8 +659,10 @@ export function TrackerHome() {
               onRetryFailed={handleRetryFailedBatch}
               onCancelAllDownloads={handleCancelAllActive}
               onRefreshDownloads={refreshDownloads}
+              onClearQueueMonitor={handleClearQueueMonitor}
             />
-          ) : (
+          )}
+          {mode === "search" && (
             <SearchView
               query={searchQuery}
               onQueryChange={setSearchQuery}
@@ -687,6 +701,9 @@ export function TrackerHome() {
               onQueueSelected={handleQueueSelected}
             />
           )}
+          {mode === "settings" && (
+            <SettingsView onSaved={refreshData} />
+          )}
         </div>
 
         <footer className="flex shrink-0 flex-col gap-1 border-t border-[#45475a] pt-[8px] text-[11px] text-[#6c7086] md:flex-row md:items-center md:justify-between">
@@ -697,7 +714,8 @@ export function TrackerHome() {
             <span className="font-bold text-[#cba6f7]">Tab</span> Switch ·{" "}
             <span className="font-bold text-[#cba6f7]">↑/k ↓/j</span> Navigate ·{" "}
             <span className="font-bold text-[#cba6f7]">d</span> Queue ·{" "}
-            <span className="font-bold text-[#cba6f7]">s</span> Scan
+            <span className="font-bold text-[#cba6f7]">s</span> Scan ·{" "}
+            <span className="font-bold text-[#cba6f7]">r</span> Refresh
           </div>
         </footer>
       </div>

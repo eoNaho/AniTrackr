@@ -91,6 +91,7 @@ export function SearchView({
             <option value="animefire">animefire</option>
             <option value="goyabu">goyabu</option>
             <option value="allanime">allanime</option>
+            <option value="dattebayo">dattebayo</option>
           </select>
           <button
             onClick={onSearch}

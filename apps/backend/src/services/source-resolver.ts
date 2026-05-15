@@ -5,6 +5,7 @@ const UA =
 
 const GOYABU_ORIGIN = "https://goyabu.io";
 const BLOGGER_ORIGIN = "https://www.blogger.com";
+const DATTEBAYO_ORIGIN = "https://www.dattebayo-br.com";
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -57,6 +58,37 @@ function extractDirectVideoFromHtml(html: string): string | null {
   }
 
   return null;
+}
+
+function extractDattebayoVideoCandidates(html: string): string[] {
+  const candidates: string[] = [];
+
+  const vidRegex = /var\s+vid\s*=\s*['"]([^'"]+)['"]/gi;
+  for (const match of html.matchAll(vidRegex)) {
+    const value = normalizeEscapedUrl(match[1] ?? "");
+    if (value && isHttpUrl(value)) candidates.push(value);
+  }
+
+  const contentUrl = html.match(/itemprop=["']contentURL["']\s+content=["']([^"']+)["']/i)?.[1] ?? "";
+  const normalizedContent = normalizeEscapedUrl(contentUrl);
+  if (normalizedContent && isHttpUrl(normalizedContent)) candidates.push(normalizedContent);
+
+  const sourceRegex = /<source[^>]+src=["'](https?:\/\/[^"']+)["']/gi;
+  for (const match of html.matchAll(sourceRegex)) {
+    const value = normalizeEscapedUrl(match[1] ?? "");
+    if (value && isHttpUrl(value)) candidates.push(value);
+  }
+
+  return [...new Set(candidates)];
+}
+
+function scoreDattebayoCandidate(url: string): number {
+  const lower = url.toLowerCase();
+  if (lower.includes("/fful/")) return 30;
+  if (lower.includes("/f333/")) return 20;
+  if (lower.includes("/fiphonec/")) return 10;
+  if (lower.endsWith(".mp4") || lower.includes(".mp4?")) return 5;
+  return 0;
 }
 
 function extractPlayersData(html: string): Array<Record<string, unknown>> {
@@ -335,6 +367,32 @@ async function resolveAnimefireEpisodeSource(episodeUrl: string): Promise<string
   return null;
 }
 
+async function resolveDattebayoEpisodeSource(episodeUrl: string): Promise<string | null> {
+  try {
+    const pageResponse = await fetch(episodeUrl, {
+      headers: {
+        "User-Agent": UA,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+        Referer: `${DATTEBAYO_ORIGIN}/`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!pageResponse.ok) return null;
+
+    const pageHtml = await pageResponse.text();
+    const candidates = extractDattebayoVideoCandidates(pageHtml);
+    if (!candidates.length) return null;
+
+    const best = [...candidates].sort((a, b) => scoreDattebayoCandidate(b) - scoreDattebayoCandidate(a))[0];
+    return best && isHttpUrl(best) ? best : null;
+  } catch (err) {
+    logger.debug("source-resolver", `dattebayo resolve failed: ${String(err)}`);
+  }
+
+  return null;
+}
+
 /**
  * Resolve a page-like source URL into a direct playable URL when possible.
  * Keeps the original URL if no resolution strategy succeeds.
@@ -345,6 +403,15 @@ export async function resolveDownloadSourceUrl(sourceUrl: string): Promise<strin
   try {
     const parsed = new URL(sourceUrl);
     const host = parsed.hostname.toLowerCase();
+
+    if (host.endsWith("dattebayo-br.com") && parsed.pathname.includes("/videos/")) {
+      const fromDattebayo = await resolveDattebayoEpisodeSource(sourceUrl);
+      if (fromDattebayo && isHttpUrl(fromDattebayo)) {
+        logger.info("source-resolver", "dattebayo->direct-mp4 resolved");
+        return fromDattebayo;
+      }
+      return sourceUrl;
+    }
 
     if (host.endsWith("goyabu.io")) {
       const fromGoyabu = await resolveGoyabuEpisodeSource(sourceUrl);

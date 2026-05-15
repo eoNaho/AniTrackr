@@ -26,6 +26,7 @@ type Props = {
   onRetryFailed: () => void;
   onCancelAllDownloads: () => void;
   onRefreshDownloads: () => void;
+  onClearQueueMonitor: () => void;
 };
 
 function fmtSpeed(kbps: number) {
@@ -66,6 +67,7 @@ export function LibraryView({
   onRetryFailed,
   onCancelAllDownloads,
   onRefreshDownloads,
+  onClearQueueMonitor,
 }: Props) {
   const selected = animes[selectedIndex < animes.length ? selectedIndex : 0] ?? null;
   const progress = selected
@@ -275,6 +277,12 @@ export function LibraryView({
               className="border border-[#45475a] px-2 py-1 text-[#f38ba8] hover:bg-[#f38ba8] hover:text-[#0f0f14]"
             >
               cancel all
+            </button>
+            <button
+              onClick={onClearQueueMonitor}
+              className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
+            >
+              clear monitor
             </button>
           </div>
         </div>

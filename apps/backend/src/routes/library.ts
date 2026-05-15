@@ -1,4 +1,5 @@
 import Elysia, { t } from "elysia";
+import type { SQLQueryBindings } from "bun:sqlite";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { scanAnime, scanFullLibrary, renameToJellyfin, getMissingEpisodes } from "../services/scanner.ts";
@@ -62,6 +63,43 @@ function parseAnime(r: AnimeRow) {
     cachedAt: r.cached_at,
     updatedAt: r.updated_at,
   };
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function asFiniteNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function asNullableFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function toSqlBinding(value: unknown): SQLQueryBindings {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return value;
+  }
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return value as unknown as SQLQueryBindings;
+  }
+  return JSON.stringify(value);
 }
 
 export const libraryRoutes = new Elysia({ prefix: "/library" })
@@ -137,14 +175,72 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
 
   // POST /api/library — adicionar anime
   .post("/", ({ body }) => {
+    type CreateLibraryPayload = {
+      kitsuId?: unknown;
+      anilistId?: unknown;
+      malId?: unknown;
+      title?: unknown;
+      titleEnglish?: unknown;
+      titleRomaji?: unknown;
+      titleNative?: unknown;
+      altTitle?: unknown;
+      synopsis?: unknown;
+      posterUrl?: unknown;
+      coverUrl?: unknown;
+      rating?: unknown;
+      kitsuStatus?: unknown;
+      anilistStatus?: unknown;
+      subtype?: unknown;
+      episodeCount?: unknown;
+      episodeLength?: unknown;
+      quality?: unknown;
+      provider?: unknown;
+      localPath?: unknown;
+      year?: unknown;
+      seasonNumber?: unknown;
+      tags?: unknown;
+      genres?: unknown;
+      sourceUrl?: unknown;
+      asciiArt?: unknown;
+    };
     const {
       kitsuId, anilistId, malId, title, titleEnglish, titleRomaji, titleNative,
       altTitle, synopsis, posterUrl, coverUrl, rating, kitsuStatus, anilistStatus,
       subtype, episodeCount, episodeLength, quality, provider, localPath, year,
       seasonNumber, tags, genres, sourceUrl, asciiArt,
-    } = body as Record<string, unknown>;
+    } = body as CreateLibraryPayload;
 
     const id = randomUUID();
+    const titleValue = asString(title, "").trim() || "Untitled";
+    const values: SQLQueryBindings[] = [
+      id,
+      asNullableString(kitsuId),
+      asNullableFiniteNumber(anilistId),
+      asNullableFiniteNumber(malId),
+      titleValue,
+      asNullableString(titleEnglish),
+      asNullableString(titleRomaji),
+      asNullableString(titleNative),
+      asNullableString(altTitle),
+      asNullableString(synopsis),
+      asNullableString(posterUrl),
+      asNullableString(coverUrl),
+      asNullableFiniteNumber(rating),
+      asString(kitsuStatus, "unknown"),
+      asString(anilistStatus, "unknown"),
+      asString(subtype, "TV"),
+      asFiniteNumber(episodeCount, 0),
+      asNullableFiniteNumber(episodeLength),
+      asString(quality, "1080p"),
+      asString(provider, "animefire"),
+      asString(localPath, ""),
+      asNullableFiniteNumber(year),
+      asFiniteNumber(seasonNumber, 1),
+      Array.isArray(tags) ? JSON.stringify(tags) : "[]",
+      Array.isArray(genres) ? JSON.stringify(genres) : "[]",
+      asNullableString(sourceUrl),
+      asString(asciiArt, ""),
+    ];
     db.run(`
       INSERT INTO animes (
         id, kitsu_id, anilist_id, mal_id, title, title_english, title_romaji, title_native,
@@ -152,19 +248,8 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
         subtype, episode_count, episode_length, quality, provider, local_path, year,
         season_number, tags, genres, source_url, ascii_art
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      id, kitsuId ?? null, anilistId ?? null, malId ?? null,
-      title, titleEnglish ?? null, titleRomaji ?? null, titleNative ?? null,
-      altTitle ?? null, synopsis ?? null, posterUrl ?? null, coverUrl ?? null,
-      rating ?? null, kitsuStatus ?? "unknown", anilistStatus ?? "unknown",
-      subtype ?? "TV", episodeCount ?? 0, episodeLength ?? null,
-      quality ?? "1080p", provider ?? "animefire", localPath ?? "",
-      year ?? null, seasonNumber ?? 1,
-      Array.isArray(tags) ? JSON.stringify(tags) : "[]",
-      Array.isArray(genres) ? JSON.stringify(genres) : "[]",
-      sourceUrl ?? null, asciiArt ?? "",
-    ]);
-    logger.info("library", `added "${title}" (id=${id})`);
+    `, values);
+    logger.info("library", `added "${titleValue}" (id=${id})`);
     return { ok: true, id };
   })
 
@@ -179,8 +264,9 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       .filter(([k]) => allowed.includes(k));
     if (!fields.length) return { error: "Nenhum campo válido" };
     const sets = fields.map(([k]) => `${k} = ?`).join(", ");
-    db.run(`UPDATE animes SET ${sets}, updated_at = datetime('now') WHERE id = ?`,
-      [...fields.map(([, v]) => v), params.id]);
+    const values: SQLQueryBindings[] = fields.map(([, v]) => toSqlBinding(v));
+    values.push(params.id);
+    db.run(`UPDATE animes SET ${sets}, updated_at = datetime('now') WHERE id = ?`, values);
     return { ok: true };
   }, { params: t.Object({ id: t.String() }) })
 
@@ -196,14 +282,21 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
 
   // GET /api/library/:id/episodes
   .get("/:id/episodes", ({ params, query }) => {
-    const episodes = db.query<{
+    type EpisodeRow = {
       id: string; number: number; season: number; title: string | null;
       synopsis: string | null; aired: string | null; duration_min: number | null;
       is_filler: number; is_recap: number; status: string;
       file_path: string | null; file_size_mb: number; watched: number; watch_progress: number;
-    }, [string, ...(string | number)[]]>(
-      `SELECT * FROM episodes WHERE anime_id = ? ${query.season ? "AND season = ?" : ""} ORDER BY season, number`
-    ).all(...(query.season ? [params.id, parseInt(query.season)] : [params.id]));
+    };
+
+    const seasonFilter = query.season ? parseInt(query.season, 10) : null;
+    const episodes = Number.isFinite(seasonFilter)
+      ? db.query<EpisodeRow, [string, number]>(
+          `SELECT * FROM episodes WHERE anime_id = ? AND season = ? ORDER BY season, number`
+        ).all(params.id, seasonFilter as number)
+      : db.query<EpisodeRow, [string]>(
+          `SELECT * FROM episodes WHERE anime_id = ? ORDER BY season, number`
+        ).all(params.id);
 
     const missing = getMissingEpisodes(params.id);
     return { animeId: params.id, total: episodes.length, missingCount: missing.length, missing, episodes };

@@ -1,51 +1,154 @@
 /**
- * Provider fallback chain: AnimeFire → Goyabu → AllAnime
- * Tenta cada provider em sequência até obter resultado.
+ * Provider fallback chain: AnimeFire → Goyabu → AllAnime → 9Anime
+ * Integra circuit breaker para saúde de providers.
  */
 
 import { animefireSearch, goyabuSearch, animefireEpisodes, goyabuEpisodes, type ScrapeResult, type Episode } from "./scraper.ts";
 import { searchAllAnime, getAllAnimeEpisodes, getAllAnimeStreamUrl } from "./allanime.ts";
+import { nineAnimeSearch, nineAnimeEpisodes, nineAnimeStreamUrl } from "./nineanime.ts";
+import { animeDriveSearch, animeDriveEpisodes, animeDriveStreamUrl } from "./animedrive.ts";
+import { superFlixSearch } from "./superflix.ts";
+import { dattebayoSearch, dattebayoEpisodes, dattebayoStreamUrl } from "./dattebayo.ts";
+import { recordSuccess, recordFailure, isAvailable } from "./circuit-breaker.ts";
 import { logger } from "../utils/logger.ts";
 
-export type Provider = "animefire" | "goyabu" | "allanime" | "all";
+export type Provider = "animefire" | "goyabu" | "allanime" | "nineanime" | "animedrive" | "superflix" | "dattebayo" | "all";
 
 export interface UnifiedSearchResult extends ScrapeResult {
   provider: Provider;
   allAnimeId?: string;
+  nineAnimeId?: string;
 }
 
-/** Busca em todos os providers e agrega resultados */
+function mapAnimeDriveEpisodeToEpisode(ep: {
+  number: number;
+  title: string;
+  url: string;
+}): Episode {
+  return {
+    number: ep.number,
+    label: ep.title?.trim() || `Episódio ${ep.number}`,
+    url: ep.url,
+  };
+}
+
+async function withCircuitBreaker<T>(
+  provider: string,
+  fn: () => Promise<T>,
+  fallback: T
+): Promise<T> {
+  if (!isAvailable(provider)) {
+    logger.warn("circuit-breaker", `Provider '${provider}' está OPEN — pulando`);
+    return fallback;
+  }
+  try {
+    const result = await fn();
+    recordSuccess(provider);
+    return result;
+  } catch (err) {
+    recordFailure(provider);
+    logger.warn("provider-chain", `${provider} falhou: ${err}`);
+    return fallback;
+  }
+}
+
 export async function searchAllProviders(
   query: string,
   providers: Provider[] = ["animefire", "goyabu", "allanime"]
 ): Promise<UnifiedSearchResult[]> {
   const tasks: Promise<UnifiedSearchResult[]>[] = [];
 
-  if (providers.includes("animefire")) {
+  if (providers.includes("animefire") || providers.includes("all")) {
     tasks.push(
-      animefireSearch(query).then((rs) =>
-        rs.map((r) => ({ ...r, provider: "animefire" as Provider }))
-      ).catch(() => [])
+      withCircuitBreaker("animefire",
+        () => animefireSearch(query).then((rs) => rs.map((r) => ({ ...r, provider: "animefire" as Provider }))),
+        []
+      )
     );
   }
-  if (providers.includes("goyabu")) {
+  if (providers.includes("goyabu") || providers.includes("all")) {
     tasks.push(
-      goyabuSearch(query).then((rs) =>
-        rs.map((r) => ({ ...r, provider: "goyabu" as Provider }))
-      ).catch(() => [])
+      withCircuitBreaker("goyabu",
+        () => goyabuSearch(query).then((rs) => rs.map((r) => ({ ...r, provider: "goyabu" as Provider }))),
+        []
+      )
     );
   }
-  if (providers.includes("allanime")) {
+  if (providers.includes("allanime") || providers.includes("all")) {
     tasks.push(
-      searchAllAnime(query).then((rs) =>
-        rs.map((r) => ({
-          title: r.englishName ?? r.name,
-          url: r.id, // AllAnime usa _id como "URL"
-          imageUrl: r.imageUrl,
-          provider: "allanime" as Provider,
-          allAnimeId: r.id,
-        }))
-      ).catch(() => [])
+      withCircuitBreaker("allanime",
+        () => searchAllAnime(query).then((rs) =>
+          rs.map((r) => ({
+            title: r.englishName ?? r.name,
+            url: r.id,
+            imageUrl: r.imageUrl,
+            provider: "allanime" as Provider,
+            allAnimeId: r.id,
+          }))
+        ),
+        []
+      )
+    );
+  }
+  if (providers.includes("nineanime") || providers.includes("all")) {
+    tasks.push(
+      withCircuitBreaker("nineanime",
+        () => nineAnimeSearch(query).then((rs) =>
+          rs.map((r) => ({
+            title: r.title,
+            url: r.animeId,
+            imageUrl: r.imageUrl,
+            provider: "nineanime" as Provider,
+            nineAnimeId: r.animeId,
+          }))
+        ),
+        []
+      )
+    );
+  }
+  if (providers.includes("animedrive") || providers.includes("all")) {
+    tasks.push(
+      withCircuitBreaker("animedrive",
+        () => animeDriveSearch(query).then((rs) =>
+          rs.map((r) => ({
+            title: r.title,
+            url: r.url,
+            imageUrl: r.imageUrl,
+            provider: "animedrive" as Provider,
+          }))
+        ),
+        []
+      )
+    );
+  }
+  if (providers.includes("superflix") || providers.includes("all")) {
+    tasks.push(
+      withCircuitBreaker("superflix",
+        () => superFlixSearch(query).then((rs) =>
+          rs.map((r) => ({
+            title: r.title,
+            url: r.linkUrl || r.tmdbId,
+            imageUrl: r.imageUrl,
+            provider: "superflix" as Provider,
+          }))
+        ),
+        []
+      )
+    );
+  }
+  if (providers.includes("dattebayo") || providers.includes("all")) {
+    tasks.push(
+      withCircuitBreaker("dattebayo",
+        () => dattebayoSearch(query).then((rs) =>
+          rs.map((r) => ({
+            title: r.title,
+            url: r.url,
+            imageUrl: r.imageUrl,
+            provider: "dattebayo" as Provider,
+          }))
+        ),
+        []
+      )
     );
   }
 
@@ -57,13 +160,12 @@ export async function searchAllProviders(
   return results;
 }
 
-/** Obtém episódios com fallback entre providers */
 export async function getEpisodesWithFallback(
   animeUrl: string,
   provider: Provider,
-  allAnimeId?: string
+  allAnimeId?: string,
+  nineAnimeId?: string
 ): Promise<Episode[]> {
-  // Tenta provider primário
   const primary = async (): Promise<Episode[]> => {
     if (provider === "animefire") return animefireEpisodes(animeUrl);
     if (provider === "goyabu") return goyabuEpisodes(animeUrl);
@@ -71,71 +173,138 @@ export async function getEpisodesWithFallback(
       const nums = await getAllAnimeEpisodes(allAnimeId);
       return nums.map((n) => ({ number: n, label: `Episódio ${n}`, url: String(n) }));
     }
+    if (provider === "nineanime" && nineAnimeId) {
+      const eps = await nineAnimeEpisodes(nineAnimeId);
+      return eps.map((e) => ({ number: e.number, label: e.title, url: e.episodeId }));
+    }
+    if (provider === "animedrive") {
+      const eps = await animeDriveEpisodes(animeUrl);
+      return eps.map(mapAnimeDriveEpisodeToEpisode);
+    }
+    if (provider === "dattebayo") {
+      const eps = await dattebayoEpisodes(animeUrl);
+      return eps.map((e) => ({ number: e.number, label: e.label, url: e.url }));
+    }
     return [];
   };
 
   try {
     const eps = await primary();
-    if (eps.length > 0) return eps;
-    logger.warn("provider-chain", `primary (${provider}) returned 0 episodes, trying fallbacks`);
+    if (eps.length > 0) {
+      recordSuccess(provider);
+      return eps;
+    }
+    logger.warn("provider-chain", `primary (${provider}) retornou 0 episódios, tentando fallbacks`);
   } catch (err) {
-    logger.warn("provider-chain", `primary (${provider}) failed: ${err}`);
+    recordFailure(provider);
+    logger.warn("provider-chain", `primary (${provider}) falhou: ${err}`);
   }
 
-  // Fallback chain
-  const fallbackOrder: Provider[] = ["animefire", "goyabu", "allanime"].filter(
+  const fallbackOrder: Provider[] = ["animefire", "goyabu", "allanime", "nineanime", "animedrive", "dattebayo"].filter(
     (p) => p !== provider
   ) as Provider[];
 
   for (const fallback of fallbackOrder) {
-    logger.info("provider-chain", `trying fallback provider: ${fallback}`);
+    if (!isAvailable(fallback)) continue;
+    logger.info("provider-chain", `tentando fallback: ${fallback}`);
     try {
-      if (fallback === "animefire") {
-        const eps = await animefireEpisodes(animeUrl);
-        if (eps.length) return eps;
-      } else if (fallback === "goyabu") {
-        const eps = await goyabuEpisodes(animeUrl);
-        if (eps.length) return eps;
+      let eps: Episode[] = [];
+      if (fallback === "animefire") eps = await animefireEpisodes(animeUrl);
+      else if (fallback === "goyabu") eps = await goyabuEpisodes(animeUrl);
+      else if (fallback === "nineanime" && nineAnimeId) {
+        const rawEps = await nineAnimeEpisodes(nineAnimeId);
+        eps = rawEps.map((e) => ({ number: e.number, label: e.title, url: e.episodeId }));
+      } else if (fallback === "animedrive") {
+        const rawEps = await animeDriveEpisodes(animeUrl);
+        eps = rawEps.map(mapAnimeDriveEpisodeToEpisode);
+      } else if (fallback === "dattebayo") {
+        const rawEps = await dattebayoEpisodes(animeUrl);
+        eps = rawEps.map((e) => ({ number: e.number, label: e.label, url: e.url }));
       }
-      // AllAnime não tem fallback por URL — precisa do ID
+      if (eps.length) {
+        recordSuccess(fallback);
+        return eps;
+      }
     } catch (err) {
-      logger.warn("provider-chain", `fallback ${fallback} failed: ${err}`);
+      recordFailure(fallback);
+      logger.warn("provider-chain", `fallback ${fallback} falhou: ${err}`);
     }
   }
 
   return [];
 }
 
-/** Obtém stream URL com fallback entre providers */
 export async function getStreamUrlWithFallback(params: {
   provider: Provider;
   episodeUrl: string;
   allAnimeId?: string;
   episodeNumber?: number;
   quality?: string;
-}): Promise<{ url: string; provider: Provider; quality: string } | null> {
-  const { provider, episodeUrl, allAnimeId, episodeNumber, quality = "best" } = params;
+  nineAnimeEpisodeId?: string;
+  preferSub?: boolean;
+}): Promise<{ url: string; provider: Provider; quality: string; referer?: string } | null> {
+  const { provider, episodeUrl, allAnimeId, episodeNumber, quality = "best", nineAnimeEpisodeId, preferSub = true } = params;
 
   // AllAnime primeiro se disponível
-  if (allAnimeId && episodeNumber != null) {
+  if (allAnimeId && episodeNumber != null && isAvailable("allanime")) {
     try {
-      const stream = await getAllAnimeStreamUrl(allAnimeId, episodeNumber, "sub", quality);
+      const stream = await getAllAnimeStreamUrl(allAnimeId, episodeNumber, preferSub ? "sub" : "dub", quality);
       if (stream) {
-        logger.info("provider-chain", `stream from allanime: ${stream.quality}`);
+        recordSuccess("allanime");
         return { url: stream.url, provider: "allanime", quality: stream.quality };
       }
     } catch (err) {
-      logger.warn("provider-chain", `allanime stream failed: ${err}`);
+      recordFailure("allanime");
+      logger.warn("provider-chain", `allanime stream falhou: ${err}`);
     }
   }
 
-  // Nota: AnimeFire/Goyabu exigem navegação adicional na página para extrair o stream
-  // — isso é feito pelo yt-dlp no downloader real. Retornamos a URL da página.
-  logger.info("provider-chain", `returning page URL for yt-dlp: ${episodeUrl}`);
+  // 9Anime se disponível
+  if (nineAnimeEpisodeId && isAvailable("nineanime")) {
+    try {
+      const stream = await nineAnimeStreamUrl(nineAnimeEpisodeId, preferSub ? "sub" : "dub");
+      if (stream) {
+        recordSuccess("nineanime");
+        return { url: stream.m3u8Url, provider: "nineanime", quality: "hls", referer: stream.referer };
+      }
+    } catch (err) {
+      recordFailure("nineanime");
+      logger.warn("provider-chain", `nineanime stream falhou: ${err}`);
+    }
+  }
+
+  // AnimeDrive se a episodeUrl for do AnimeDrive
+  if (provider === "animedrive" && episodeUrl && isAvailable("animedrive")) {
+    try {
+      const stream = await animeDriveStreamUrl(episodeUrl);
+      if (stream) {
+        recordSuccess("animedrive");
+        return { url: stream.url, provider: "animedrive", quality: stream.quality, referer: stream.referer };
+      }
+    } catch (err) {
+      recordFailure("animedrive");
+      logger.warn("provider-chain", `animedrive stream falhou: ${err}`);
+    }
+  }
+
+  if (provider === "dattebayo" && episodeUrl && isAvailable("dattebayo")) {
+    try {
+      const stream = await dattebayoStreamUrl(episodeUrl, quality === "best" ? "best" : "hd");
+      if (stream) {
+        recordSuccess("dattebayo");
+        return { url: stream.url, provider: "dattebayo", quality: stream.quality, referer: stream.referer };
+      }
+    } catch (err) {
+      recordFailure("dattebayo");
+      logger.warn("provider-chain", `dattebayo stream falhou: ${err}`);
+    }
+  }
+
+  // Retorna URL de página para yt-dlp processar (AnimeFire/Goyabu)
+  logger.info("provider-chain", `retornando URL de página para yt-dlp: ${episodeUrl}`);
   return { url: episodeUrl, provider, quality: "ytdlp" };
 }
 
-/** Informações sobre os providers disponíveis */
 export function getProviderInfo() {
   return [
     {
@@ -161,6 +330,46 @@ export function getProviderInfo() {
       language: "en",
       active: true,
       description: "Melhor fonte EN. GraphQL + AES-256-CTR. Suporte sub/dub.",
+    },
+    {
+      id: "nineanime",
+      name: "9Anime",
+      url: "https://9animetv.to",
+      language: "en",
+      active: true,
+      description: "Fonte EN alternativa. AJAX + Rapid-Cloud. Sub/Dub.",
+    },
+    {
+      id: "animedrive",
+      name: "AnimeDrive",
+      url: "https://animesdrive.online",
+      language: "pt-BR",
+      active: true,
+      description: "Fonte PT-BR alternativa. WordPress DooPlay + MP4/HLS direto.",
+    },
+    {
+      id: "superflix",
+      name: "SuperFlix",
+      url: "https://superflixapi.online",
+      language: "pt-BR",
+      active: true,
+      description: "Filmes, séries e animes PT-BR. CSRF tokens + bootstrap API.",
+    },
+    {
+      id: "dattebayo",
+      name: "Dattebayo BR",
+      url: "https://www.dattebayo-br.com",
+      language: "pt-BR",
+      active: true,
+      description: "Fonte PT-BR com busca, episodios e MP4 direto na pagina do episodio.",
+    },
+    {
+      id: "nyaa",
+      name: "Nyaa.si (Torrent)",
+      url: "https://nyaa.si",
+      language: "multi",
+      active: true,
+      description: "Buscador de torrents. Requer qBittorrent configurado.",
     },
   ];
 }
