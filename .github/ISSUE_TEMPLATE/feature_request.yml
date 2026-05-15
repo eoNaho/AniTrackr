@@ -14,7 +14,7 @@ body:
     attributes:
       label: Problema atual
       description: Que dor isso resolve?
-      placeholder: Ex: fluxo de enfileirar episodios exige repeticao manual
+      placeholder: "Ex: fluxo de enfileirar episodios exige repeticao manual"
     validations:
       required: true
 
@@ -23,7 +23,7 @@ body:
     attributes:
       label: Solucao proposta
       description: Como voce imagina a feature funcionando
-      placeholder: Ex: botao para enfileirar intervalo de episodios com 1 clique
+      placeholder: "Ex: botao para enfileirar intervalo de episodios com 1 clique"
     validations:
       required: true
 

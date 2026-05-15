@@ -7,7 +7,7 @@ body:
     id: question
     attributes:
       label: Qual sua duvida?
-      placeholder: Ex: como rodar com imagem pronta no Docker sem build local?
+      placeholder: "Ex: como rodar com imagem pronta no Docker sem build local?"
     validations:
       required: true
 
@@ -16,7 +16,7 @@ body:
     attributes:
       label: Contexto
       description: Sistema operacional, Docker/local, provider, trecho de log etc
-      placeholder: Ex: Ubuntu 24.04, Docker Compose plugin, backend em porta 3001
+      placeholder: "Ex: Ubuntu 24.04, Docker Compose plugin, backend em porta 3001"
 
   - type: textarea
     id: tried

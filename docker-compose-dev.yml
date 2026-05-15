@@ -2,7 +2,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: ghcr.io/eonaho/anitrackr-backend:latest
+      dockerfile: apps/backend/Dockerfile
     container_name: anitrackr-backend
     restart: unless-stopped
     environment:
@@ -27,7 +27,7 @@ services:
   web:
     build:
       context: .
-      dockerfile: ghcr.io/eonaho/anitrackr-web:latest
+      dockerfile: apps/web/Dockerfile
       args:
         # Sem NEXT_PUBLIC_BACKEND_URL => frontend usa mesma origem e Next faz proxy interno para backend
         NEXT_PUBLIC_BACKEND_URL: ""

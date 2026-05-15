@@ -13,7 +13,7 @@ body:
     id: provider_name
     attributes:
       label: Nome do provider
-      placeholder: Ex: anirena
+      placeholder: "Ex: anirena"
     validations:
       required: true
 
@@ -21,7 +21,7 @@ body:
     id: provider_url
     attributes:
       label: URL base do provider
-      placeholder: Ex: https://exemplo.com
+      placeholder: "Ex: https://exemplo.com"
     validations:
       required: true
 
@@ -42,7 +42,7 @@ body:
     attributes:
       label: Exemplo de busca
       description: Link da busca ou como reproduzir uma busca manual
-      placeholder: Ex: https://site.com/search?q=fire+force
+      placeholder: "Ex: https://site.com/search?q=fire+force"
     validations:
       required: true
 
@@ -51,7 +51,7 @@ body:
     attributes:
       label: Exemplo de pagina de anime
       description: URL da serie que deve funcionar no provider
-      placeholder: Ex: https://site.com/anime/fire-force-season-3
+      placeholder: "Ex: https://site.com/anime/fire-force-season-3"
     validations:
       required: true
 
@@ -60,7 +60,7 @@ body:
     attributes:
       label: Exemplo de pagina de episodio
       description: URL direta de episodio, se existir
-      placeholder: Ex: https://site.com/anime/fire-force-season-3/episodio-1
+      placeholder: "Ex: https://site.com/anime/fire-force-season-3/episodio-1"
     validations:
       required: true
 
@@ -93,7 +93,7 @@ body:
     attributes:
       label: Observacoes tecnicas
       description: Headers, referer, player, iframe, m3u8/mp4, limitacoes, etc
-      placeholder: Ex: stream fica em iframe X e requer Referer especifico
+      placeholder: "Ex: stream fica em iframe X e requer Referer especifico"
 
   - type: textarea
     id: acceptance

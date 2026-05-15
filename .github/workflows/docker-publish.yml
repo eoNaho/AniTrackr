@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - master
+    paths:
+      - "apps/backend/**"
+      - "apps/web/**"
     tags:
       - "v*"
   workflow_dispatch:
