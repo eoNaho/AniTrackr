@@ -123,7 +123,7 @@ export async function searchNyaa(
 
   const resp = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; GoAnimeTracker/2.0)",
+      "User-Agent": "Mozilla/5.0 (compatible; AniTrackrTracker/2.0)",
       "Accept": "application/rss+xml, text/xml, */*",
     },
     signal: AbortSignal.timeout(15_000),

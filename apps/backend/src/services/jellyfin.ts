@@ -9,11 +9,12 @@
  *   <series_dir>/Season NN/episode.nfo — metadata do episódio (nome igual ao mkv)
  */
 
-import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { writeFileSync, mkdirSync, existsSync, statSync } from "fs";
 import { join, dirname } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { seriesDir, seasonDir } from "./naming.ts";
+import { jikanGetEpisode } from "./jikan.ts";
 
 type AnimeRow = {
   id: string; title: string; title_english: string | null; title_romaji: string | null;
@@ -50,6 +51,22 @@ function statusToNfo(s: string): string {
   if (s === "FINISHED" || s === "finished") return "Ended";
   if (s === "RELEASING" || s === "current") return "Continuing";
   return "Unknown";
+}
+
+function resolveEpisodeNfoPath(videoPath: string, episodeNumber: number): string {
+  if (/\.(mkv|mp4|avi|m4v|webm)$/i.test(videoPath)) {
+    return videoPath.replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo");
+  }
+
+  try {
+    if (existsSync(videoPath) && statSync(videoPath).isDirectory()) {
+      return join(videoPath, `episode-${String(episodeNumber).padStart(2, "0")}.nfo`);
+    }
+  } catch {
+    // ignore filesystem inspection errors
+  }
+
+  return `${videoPath}.nfo`;
 }
 
 /** Gera o tvshow.nfo no formato Jellyfin/Kodi */
@@ -182,7 +199,7 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
     const epNfoContent = buildEpisodeNfo(ep, title);
     // NFO tem o mesmo nome que o arquivo de vídeo mas extensão .nfo
     const videoPath = ep.file_path!;
-    const nfoPath = videoPath.replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo");
+    const nfoPath = resolveEpisodeNfoPath(videoPath, ep.number);
 
     // Garante que a pasta existe
     try {
@@ -225,6 +242,92 @@ export async function generateNfoAll(downloadImages = false): Promise<{ total: n
     }
   }
   return { total: animes.length, done, errors };
+}
+
+/**
+ * Gerado automaticamente após cada download completar.
+ * Busca metadados do episódio no Jikan se ainda não existirem,
+ * escreve o .nfo do episódio e cria o tvshow.nfo na raiz da série se não houver.
+ */
+export async function generateSingleEpisodeNfoAsync(
+  animeId: string,
+  episodeNumber: number,
+  season: number,
+  filePath: string
+): Promise<void> {
+  try {
+    const anime = db.query<AnimeRow, [string]>(`SELECT * FROM animes WHERE id = ?`).get(animeId);
+    if (!anime) return;
+
+    // 1. Carrega episódio do banco
+    let ep = db.query<EpisodeRow, [string, number, number]>(
+      `SELECT number, season, title, synopsis, aired, duration_min, file_path
+       FROM episodes WHERE anime_id = ? AND number = ? AND season = ?`
+    ).get(animeId, episodeNumber, season);
+
+    // 2. Se não tem título e o anime tem mal_id → busca no Jikan
+    if (ep && !ep.title && anime.mal_id) {
+      try {
+        const jikanEp = await jikanGetEpisode(anime.mal_id, episodeNumber);
+        if (jikanEp) {
+          db.run(
+            `UPDATE episodes
+             SET title      = COALESCE(NULLIF(title,''), ?),
+                 synopsis   = COALESCE(NULLIF(synopsis,''), ?),
+                 aired      = COALESCE(NULLIF(aired,''), ?),
+                 is_filler  = ?,
+                 is_recap   = ?
+             WHERE anime_id = ? AND number = ? AND season = ?`,
+            [
+              jikanEp.title || null, jikanEp.synopsis || null,
+              jikanEp.aired || null, jikanEp.isFiller ? 1 : 0,
+              jikanEp.isRecap ? 1 : 0, animeId, episodeNumber, season,
+            ]
+          );
+          // Recarrega com os novos dados
+          ep = db.query<EpisodeRow, [string, number, number]>(
+            `SELECT number, season, title, synopsis, aired, duration_min, file_path
+             FROM episodes WHERE anime_id = ? AND number = ? AND season = ?`
+          ).get(animeId, episodeNumber, season);
+          logger.info("jellyfin", `Jikan metadata: "${anime.title}" ep ${episodeNumber} — "${jikanEp.title}"`);
+        }
+      } catch (err) {
+        logger.warn("jellyfin", `Jikan fetch failed for ep ${episodeNumber}: ${err}`);
+      }
+    }
+
+    if (!ep) return;
+
+    // 3. Grava NFO do episódio (.nfo com mesmo nome do .mkv)
+    const title = anime.title_english ?? anime.title;
+    const nfoPath = resolveEpisodeNfoPath(filePath, episodeNumber);
+    mkdirSync(dirname(nfoPath), { recursive: true });
+    writeFileSync(nfoPath, buildEpisodeNfo({ ...ep, file_path: filePath }, title), "utf-8");
+    logger.info("jellyfin", `episode NFO → ${nfoPath}`);
+
+    // 4. Cria tvshow.nfo na raiz da série se não existir
+    //    Para jellyfin/plex: sobe de Season XX → série
+    //    Para simple: já está na pasta da série
+    const episodeDir = dirname(nfoPath);
+    const serPath = /[/\\]Season\s*\d+/i.test(episodeDir) ? dirname(episodeDir) : episodeDir;
+    const tvshowNfoPath = join(serPath, "tvshow.nfo");
+
+    if (!existsSync(tvshowNfoPath)) {
+      mkdirSync(serPath, { recursive: true });
+      writeFileSync(tvshowNfoPath, buildTvshowNfo(anime), "utf-8");
+      logger.info("jellyfin", `tvshow.nfo → ${tvshowNfoPath}`);
+    }
+
+    // 5. Baixa poster se ainda não existir
+    if (anime.poster_url && !existsSync(join(serPath, "poster.jpg"))) {
+      void downloadImage(anime.poster_url, join(serPath, "poster.jpg"));
+    }
+    if (anime.cover_url && !existsSync(join(serPath, "fanart.jpg"))) {
+      void downloadImage(anime.cover_url, join(serPath, "fanart.jpg"));
+    }
+  } catch (err) {
+    logger.error("jellyfin", `generateSingleEpisodeNfoAsync(${animeId}, ep${episodeNumber}) falhou: ${err}`);
+  }
 }
 
 /** Baixa poster e fanart para um anime sem gerar NFO */

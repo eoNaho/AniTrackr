@@ -94,7 +94,7 @@ export function EpisodeList({ animeId }: Props) {
           const isWatched = ep.watched === 1;
           return (
             <button
-              key={ep.number}
+              key={ep.id}
               title={ep.title ? `Ep ${ep.number}: ${ep.title}${ep.isFiller ? " [filler]" : ""}` : `Ep ${ep.number}`}
               onClick={() => ep.status === "downloaded" && handleToggleWatched(ep)}
               disabled={ep.status !== "downloaded" || toggling === ep.number}

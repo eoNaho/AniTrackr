@@ -63,112 +63,112 @@ async function withCircuitBreaker<T>(
   }
 }
 
+export interface SearchProviderStats {
+  count: number;
+  status: "ok" | "empty" | "skipped"; // skipped = circuit breaker open
+}
+
+export interface SearchAllResult {
+  results: UnifiedSearchResult[];
+  providerStats: Record<string, SearchProviderStats>;
+}
+
 export async function searchAllProviders(
   query: string,
   providers: Provider[] = ["animefire", "goyabu", "allanime"]
-): Promise<UnifiedSearchResult[]> {
-  const tasks: Promise<UnifiedSearchResult[]>[] = [];
+): Promise<SearchAllResult> {
+  type NamedTask = { provider: string; task: Promise<UnifiedSearchResult[]>; skipped: boolean };
+  const named: NamedTask[] = [];
 
-  if (providers.includes("animefire") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("animefire",
-        () => animefireSearch(query).then((rs) => rs.map((r) => ({ ...r, provider: "animefire" as Provider }))),
-        []
-      )
-    );
-  }
-  if (providers.includes("goyabu") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("goyabu",
-        () => goyabuSearch(query).then((rs) => rs.map((r) => ({ ...r, provider: "goyabu" as Provider }))),
-        []
-      )
-    );
-  }
-  if (providers.includes("allanime") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("allanime",
-        () => searchAllAnime(query).then((rs) =>
-          rs.map((r) => ({
-            title: r.englishName ?? r.name,
-            url: r.id,
-            imageUrl: r.imageUrl,
-            provider: "allanime" as Provider,
-            allAnimeId: r.id,
-          }))
-        ),
-        []
-      )
-    );
-  }
-  if (providers.includes("nineanime") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("nineanime",
-        () => nineAnimeSearch(query).then((rs) =>
-          rs.map((r) => ({
-            title: r.title,
-            url: r.animeId,
-            imageUrl: r.imageUrl,
-            provider: "nineanime" as Provider,
-            nineAnimeId: r.animeId,
-          }))
-        ),
-        []
-      )
-    );
-  }
-  if (providers.includes("animedrive") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("animedrive",
-        () => animeDriveSearch(query).then((rs) =>
-          rs.map((r) => ({
-            title: r.title,
-            url: r.url,
-            imageUrl: r.imageUrl,
-            provider: "animedrive" as Provider,
-          }))
-        ),
-        []
-      )
-    );
-  }
-  if (providers.includes("superflix") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("superflix",
-        () => superFlixSearch(query).then((rs) =>
-          rs.map((r) => ({
-            title: r.title,
-            url: r.linkUrl || "",
-            imageUrl: r.imageUrl,
-            provider: "superflix" as Provider,
-          }))
-        ),
-        []
-      )
-    );
-  }
-  if (providers.includes("dattebayo") || providers.includes("all")) {
-    tasks.push(
-      withCircuitBreaker("dattebayo",
-        () => dattebayoSearch(query).then((rs) =>
-          rs.map((r) => ({
-            title: r.title,
-            url: r.url,
-            imageUrl: r.imageUrl,
-            provider: "dattebayo" as Provider,
-          }))
-        ),
-        []
-      )
-    );
+  function addProvider(id: Provider, fn: () => Promise<UnifiedSearchResult[]>) {
+    if (!providers.includes(id) && !providers.includes("all")) return;
+    const skipped = !isAvailable(id);
+    named.push({
+      provider: id,
+      skipped,
+      task: skipped
+        ? Promise.resolve([])
+        : withCircuitBreaker(id, fn, []),
+    });
   }
 
-  const settled = await Promise.allSettled(tasks);
+  addProvider("animefire", () =>
+    animefireSearch(query).then((rs) => rs.map((r) => ({ ...r, provider: "animefire" as Provider })))
+  );
+  addProvider("goyabu", () =>
+    goyabuSearch(query).then((rs) => rs.map((r) => ({ ...r, provider: "goyabu" as Provider })))
+  );
+  addProvider("allanime", () =>
+    searchAllAnime(query).then((rs) =>
+      rs.map((r) => ({
+        title: r.englishName ?? r.name,
+        url: r.id,
+        imageUrl: r.imageUrl,
+        provider: "allanime" as Provider,
+        allAnimeId: r.id,
+      }))
+    )
+  );
+  addProvider("nineanime", () =>
+    nineAnimeSearch(query).then((rs) =>
+      rs.map((r) => ({
+        title: r.title,
+        url: r.animeId,
+        imageUrl: r.imageUrl,
+        provider: "nineanime" as Provider,
+        nineAnimeId: r.animeId,
+      }))
+    )
+  );
+  addProvider("animedrive", () =>
+    animeDriveSearch(query).then((rs) =>
+      rs.map((r) => ({
+        title: r.title,
+        url: r.url,
+        imageUrl: r.imageUrl,
+        provider: "animedrive" as Provider,
+      }))
+    )
+  );
+  addProvider("superflix", () =>
+    superFlixSearch(query).then((rs) =>
+      rs.map((r) => ({
+        title: r.title,
+        url: r.linkUrl || "",
+        imageUrl: r.imageUrl,
+        provider: "superflix" as Provider,
+      }))
+    )
+  );
+  addProvider("dattebayo", () =>
+    dattebayoSearch(query).then((rs) =>
+      rs.map((r) => ({
+        title: r.title,
+        url: r.url,
+        imageUrl: r.imageUrl,
+        provider: "dattebayo" as Provider,
+      }))
+    )
+  );
+
+  const settled = await Promise.allSettled(named.map((n) => n.task));
   const results: UnifiedSearchResult[] = [];
-  for (const r of settled) {
-    if (r.status === "fulfilled") results.push(...r.value);
+  const providerStats: Record<string, SearchProviderStats> = {};
+
+  for (let i = 0; i < named.length; i++) {
+    const { provider, skipped } = named[i];
+    const res = settled[i];
+    if (skipped) {
+      providerStats[provider] = { count: 0, status: "skipped" };
+    } else if (res.status === "fulfilled") {
+      results.push(...res.value);
+      providerStats[provider] = { count: res.value.length, status: res.value.length > 0 ? "ok" : "empty" };
+    } else {
+      providerStats[provider] = { count: 0, status: "empty" };
+    }
   }
-  return results;
+
+  return { results, providerStats };
 }
 
 export async function getEpisodesWithFallback(

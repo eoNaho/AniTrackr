@@ -1,0 +1,80 @@
+name: Bug report
+description: Reportar erro, regressao ou comportamento inesperado
+title: "[BUG] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por abrir este bug.
+        Preencha o maximo de contexto para facilitar reproducao.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Resumo do problema
+      description: O que aconteceu?
+      placeholder: Ex: ao enfileirar episodio 1, o sistema baixa episodio 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      description: Liste passos claros e numerados
+      placeholder: |
+        1. Ir para Search
+        2. Selecionar anime X
+        3. Marcar episodio Y
+        4. Clicar em ENFILEIRAR
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado
+      placeholder: Ex: deveria baixar o episodio selecionado
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamento atual
+      placeholder: Ex: baixa episodio diferente / duplica item na biblioteca
+    validations:
+      required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: Versao da aplicacao
+      description: Ex: v2.0.1
+      placeholder: v2.0.1
+
+  - type: input
+    id: backend_commit
+    attributes:
+      label: Commit ou branch
+      placeholder: main / feat/x / sha
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, prints ou erros
+      description: Cole logs relevantes do frontend/backend/queue monitor
+      render: shell
+
+  - type: dropdown
+    id: docker_usage
+    attributes:
+      label: Rodando com Docker?
+      options:
+        - nao
+        - sim (build local)
+        - sim (imagem pronta GHCR)
+    validations:
+      required: true
+

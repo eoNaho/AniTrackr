@@ -1,5 +1,5 @@
 /**
- * AllAnime scraper — TypeScript port do GoAnime allanime.go
+ * AllAnime scraper — TypeScript port do AniTrackr allanime.go
  *
  * Key phrase: "Xot36i3lK3:v1"  (rotacionada em 2026-04-24)
  * Persisted query hash: d405d0e...  (2026-04-22)

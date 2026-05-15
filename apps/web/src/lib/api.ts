@@ -284,9 +284,16 @@ export async function deleteLibraryAnime(id: string) {
   return response.json() as Promise<{ ok?: boolean; error?: string }>;
 }
 
+export type ProviderSearchStat = { count: number; status: "ok" | "empty" | "skipped" };
+
 export async function searchAnime(query: string, source = "all") {
   const params = new URLSearchParams({ q: query, source });
-  return requestJson<{ source: string; total?: number; results: SearchResult[] }>(`/api/search?${params.toString()}`);
+  return requestJson<{
+    source: string;
+    total?: number;
+    results: SearchResult[];
+    providerStats?: Record<string, ProviderSearchStat>;
+  }>(`/api/search?${params.toString()}`);
 }
 
 export async function searchEpisodes(input: { url?: string; provider?: string; allAnimeId?: string }) {
@@ -331,7 +338,7 @@ export async function createLibraryAnime(payload: {
     }),
   });
   if (!response.ok) throw new Error(`Create library anime failed: ${response.status}`);
-  return response.json() as Promise<{ ok: boolean; id: string }>;
+  return response.json() as Promise<{ ok: boolean; id: string; reused?: boolean }>;
 }
 
 export async function fetchMetadataSearch(q: string, source = "kitsu") {
@@ -430,6 +437,51 @@ export async function enqueueEpisodes(payload: {
   return response.json() as Promise<{ ok: boolean; queued: number }>;
 }
 
+// ── Jellyfin NFO ──────────────────────────────────────────────────────────────
+
+export async function generateJellyfinNfo(animeId: string, downloadImages = true) {
+  const response = await fetch(
+    `${getBackendUrl()}/api/jellyfin/nfo/${animeId}?images=${downloadImages}`,
+    { method: "POST", headers: { Accept: "application/json" } }
+  );
+  if (!response.ok) throw new Error(`NFO generation failed: ${response.status}`);
+  return response.json() as Promise<{
+    ok: boolean;
+    tvshowNfo: string;
+    posterDownloaded: boolean;
+    fanartDownloaded: boolean;
+    episodesNfo: number;
+    errors: string[];
+  }>;
+}
+
+export async function generateAllJellyfinNfo(downloadImages = false) {
+  const response = await fetch(
+    `${getBackendUrl()}/api/jellyfin/nfo/all?images=${downloadImages}`,
+    { method: "POST", headers: { Accept: "application/json" } }
+  );
+  if (!response.ok) throw new Error(`NFO all failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; total: number; done: number; errors: number }>;
+}
+
+export async function enrichAnimeJikan(animeId: string) {
+  const response = await fetch(`${getBackendUrl()}/api/metadata/jikan/enrich/${animeId}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Jikan enrich failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; enriched: number; total: number; message?: string }>;
+}
+
+export async function enrichAnimeAnilist(animeId: string) {
+  const response = await fetch(`${getBackendUrl()}/api/metadata/enrich/${animeId}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`AniList enrich failed: ${response.status}`);
+  return response.json() as Promise<{ ok: boolean; anilistId?: number; title?: string; error?: string }>;
+}
+
 // ── Episodes individuais ───────────────────────────────────────────────────────
 
 export type AnimeEpisode = {
@@ -494,6 +546,25 @@ export async function triggerAutoSchedule() {
     method: "POST",
     headers: { Accept: "application/json" },
   });
-  if (!response.ok) throw new Error(`Auto-schedule run failed: ${response.status}`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(
+        "Auto-schedule indisponivel neste backend (rota /api/auto-schedule/run nao encontrada). Reinicie/atualize o backend."
+      );
+    }
+
+    let details = "";
+    try {
+      details = (await response.text()).trim();
+    } catch {
+      // ignore body parse error
+    }
+
+    throw new Error(
+      details
+        ? `Auto-schedule run failed: ${response.status} - ${details}`
+        : `Auto-schedule run failed: ${response.status}`
+    );
+  }
   return response.json() as Promise<{ ok: boolean; message: string }>;
 }

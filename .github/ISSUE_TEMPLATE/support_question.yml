@@ -1,0 +1,27 @@
+name: Support question
+description: Duvidas de uso, configuracao ou deploy
+title: "[SUPPORT] "
+labels: ["question", "triage"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Qual sua duvida?
+      placeholder: Ex: como rodar com imagem pronta no Docker sem build local?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto
+      description: Sistema operacional, Docker/local, provider, trecho de log etc
+      placeholder: Ex: Ubuntu 24.04, Docker Compose plugin, backend em porta 3001
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: O que voce ja tentou?
+      placeholder: Comandos e resultado atual
+      render: shell
+

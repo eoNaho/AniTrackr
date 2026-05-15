@@ -33,8 +33,8 @@ docker compose logs -f --tail=150
 
 Volumes nomeados:
 
-- `goanime_data` -> dados do SQLite (`/data/.goanime/tracker.db`)
-- `goanime_downloads` -> arquivos baixados (`/downloads`)
+- `anitrackr_data` -> dados do SQLite (`/data/.anitrackr/tracker.db`)
+- `anitrackr_downloads` -> arquivos baixados (`/downloads`)
 
 ## 5) Configuração de download no app
 
@@ -59,3 +59,47 @@ docker compose down
 ```
 
 > Não use `-v` no `down` se quiser manter banco e downloads.
+
+## 8) Rodar com imagem pronta (sem build local)
+
+Depois que o workflow `docker-publish` enviar imagens para GHCR, o usuario final pode:
+
+```bash
+# 1) baixar imagens
+docker compose -f docker-compose.images.yml pull
+
+# 2) subir stack
+docker compose -f docker-compose.images.yml up -d
+```
+
+Ou pelos scripts:
+
+```bash
+bun run docker:pull:image
+bun run docker:up:image
+```
+
+Tags:
+
+- `latest` na branch `main`
+- `v*` quando publicar tag (ex: `v2.1.0`)
+
+Para usar tag especifica:
+
+```bash
+ANITRACKR_IMAGE_TAG=v2.1.0 docker compose -f docker-compose.images.yml up -d
+```
+
+Para usar outro owner (fork):
+
+```bash
+ANITRACKR_IMAGE_OWNER=SEU_USUARIO docker compose -f docker-compose.images.yml up -d
+```
+
+Se o nome do repositorio da imagem for diferente:
+
+```bash
+ANITRACKR_IMAGE_OWNER=SEU_USUARIO ANITRACKR_IMAGE_REPO=SEU_REPO docker compose -f docker-compose.images.yml up -d
+```
+
+> Nota: referencias de imagem Docker/GHCR devem ficar em minusculo (`owner/repo`).

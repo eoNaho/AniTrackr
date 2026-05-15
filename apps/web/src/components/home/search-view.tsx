@@ -2,9 +2,9 @@
 
 import React from "react";
 import { Panel } from "./ui";
-import type { KitsuMetadata, SearchResult } from "@/lib/api";
+import type { KitsuMetadata, SearchResult, ProviderSearchStat } from "@/lib/api";
 
-type Episode = { number: number; label: string; url: string };
+type Episode = { key: string; number: number; label: string; url: string };
 
 type Props = {
   query: string;
@@ -15,6 +15,7 @@ type Props = {
   isBusy: boolean;
 
   results: SearchResult[];
+  providerStats: Record<string, ProviderSearchStat> | null;
   selectedResult: SearchResult | null;
   onSelectResult: (r: SearchResult) => void;
 
@@ -22,8 +23,8 @@ type Props = {
   isLoadingMeta: boolean;
 
   episodes: Episode[];
-  selectedEpisodes: number[];
-  onToggleEpisode: (n: number) => void;
+  selectedEpisodes: string[];
+  onToggleEpisode: (episodeKey: string) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
   isLoadingEpisodes: boolean;
@@ -34,7 +35,7 @@ type Props = {
 
 export function SearchView({
   query, onQueryChange, source, onSourceChange, onSearch, isBusy,
-  results, selectedResult, onSelectResult,
+  results, providerStats, selectedResult, onSelectResult,
   kitsuMeta, isLoadingMeta,
   episodes, selectedEpisodes, onToggleEpisode, onSelectAll, onClearAll, isLoadingEpisodes,
   downloadPath,
@@ -43,7 +44,7 @@ export function SearchView({
   const canQueue = !isBusy && !!selectedResult && selectedEpisodes.length > 0 && downloadPath.trim().length > 0;
 
   return (
-    <div className="flex flex-1 flex-col gap-[20px] overflow-visible">
+    <div className="flex flex-1 flex-col gap-[20px] overflow-hidden">
       {/* ── Search bar ── */}
       <Panel title="Search :: Buscar Anime">
         <div className="flex flex-col gap-2 p-3 md:flex-row">
@@ -60,10 +61,17 @@ export function SearchView({
             className="border border-[#45475a] bg-[#0f0f14] px-2 py-2 text-[13px] text-[#e0e0ed] outline-none focus:border-[#cba6f7]"
           >
             <option value="all">all providers</option>
-            <option value="animefire">animefire</option>
-            <option value="goyabu">goyabu</option>
-            <option value="allanime">allanime</option>
-            <option value="dattebayo">dattebayo</option>
+            <optgroup label="── PT-BR ──">
+              <option value="animefire">animefire</option>
+              <option value="goyabu">goyabu</option>
+              <option value="animedrive">animedrive</option>
+              <option value="superflix">superflix</option>
+              <option value="dattebayo">dattebayo</option>
+            </optgroup>
+            <optgroup label="── EN ──">
+              <option value="allanime">allanime</option>
+              <option value="nineanime">9anime</option>
+            </optgroup>
           </select>
           <button
             onClick={onSearch}
@@ -76,13 +84,36 @@ export function SearchView({
       </Panel>
 
       {/* ── Results + Detail ── */}
-      <div className="grid flex-1 gap-[14px] overflow-hidden md:grid-cols-[280px_1fr]">
+      <div className="grid min-h-0 flex-1 gap-[14px] md:grid-cols-[280px_1fr]">
         {/* Resultados */}
-        <Panel title="Resultados" className="flex flex-col min-h-0">
-          <div className="flex-1 overflow-auto">
+        <Panel title="Resultados" className="min-h-0">
+          {/* Provider stats — mostra quantos resultados cada fonte retornou */}
+          {providerStats && Object.keys(providerStats).length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 border-b border-[#232330] px-3 py-2 text-[10px]">
+              {Object.entries(providerStats).map(([name, stat]) => (
+                <span key={name} className="flex items-center gap-1">
+                  <span
+                    className={
+                      stat.status === "ok" ? "text-[#a6e3a1]"
+                      : stat.status === "skipped" ? "text-[#f38ba8]"
+                      : "text-[#6c7086]"
+                    }
+                  >
+                    {stat.status === "ok" ? "●" : stat.status === "skipped" ? "✕" : "○"}
+                  </span>
+                  <span className={stat.status === "ok" ? "text-[#bac2de]" : "text-[#45475a]"}>
+                    {name}
+                    {stat.status === "ok" && <span className="text-[#6c7086]"> {stat.count}</span>}
+                    {stat.status === "skipped" && <span className="text-[#f38ba8]"> off</span>}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {results.length === 0 ? (
               <div className="px-4 py-6 text-[12px] text-[#6c7086]">
-                Nenhum resultado. Digite e pressione BUSCAR ou Enter.
+                {providerStats ? "Nenhum provider retornou resultados." : "Digite e pressione BUSCAR ou Enter."}
               </div>
             ) : (
               results.map((r, i) => (
@@ -105,14 +136,14 @@ export function SearchView({
         <Panel
           title={selectedResult ? `Detalhes :: ${selectedResult.title}` : "Detalhes :: Selecione um resultado"}
           focused={!!selectedResult}
-          className="flex flex-col min-h-0"
+          className="min-h-0"
         >
           {!selectedResult ? (
             <div className="flex h-full items-center justify-center text-[13px] text-[#6c7086]">
               ← Selecione um resultado para ver detalhes
             </div>
           ) : (
-            <div className="grid h-full gap-4 overflow-auto p-4 lg:grid-cols-[200px_1fr]">
+            <div className="grid flex-1 min-h-0 gap-4 overflow-y-auto p-4 lg:grid-cols-[200px_1fr]">
               {/* Coluna esquerda: poster + stats */}
               <div className="flex flex-col gap-3">
                 {isLoadingMeta ? (
@@ -188,11 +219,11 @@ export function SearchView({
                     ) : (
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 md:grid-cols-3">
                         {episodes.map((ep) => (
-                          <label key={ep.number} className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] hover:text-[#cba6f7]">
+                          <label key={ep.key} className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[12px] hover:text-[#cba6f7]">
                             <input
                               type="checkbox"
-                              checked={selectedEpisodes.includes(ep.number)}
-                              onChange={() => onToggleEpisode(ep.number)}
+                              checked={selectedEpisodes.includes(ep.key)}
+                              onChange={() => onToggleEpisode(ep.key)}
                               className="accent-[#cba6f7]"
                             />
                             <span>{ep.label}</span>

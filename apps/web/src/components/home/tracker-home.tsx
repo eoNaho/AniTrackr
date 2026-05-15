@@ -33,7 +33,7 @@ import {
   type LibrarySummary,
   type SearchResult,
 } from "@/lib/api";
-import { AnimeView } from "./ui";
+import { AnimeView, ConfirmDialog } from "./ui";
 import { LibraryView } from "./library-view";
 import { SearchView } from "./search-view";
 import { SettingsView } from "./settings-view";
@@ -68,6 +68,11 @@ function mapAnime(a: LibraryAnime): AnimeView {
 type Mode = "library" | "search" | "settings";
 type LogEntry = { time: string; module: string; text: string };
 type StreamState = "connecting" | "live" | "fallback";
+type SearchEpisode = { key: string; number: number; label: string; url: string };
+
+function buildEpisodeKey(episode: { number: number; label: string; url: string }, index: number) {
+  return `${episode.number}::${episode.url}::${episode.label}::${index}`;
+}
 
 export function TrackerHome() {
   const [mode, setMode] = useState<Mode>("library");
@@ -79,7 +84,7 @@ export function TrackerHome() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isBusy, setIsBusy] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([
-    { time: "00:00:00", module: "app", text: "Iniciando GoAnime Tracker v2.0.1..." },
+    { time: "00:00:00", module: "app", text: "Iniciando AniTrackr v2.0.1..." },
   ]);
 
   const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([]);
@@ -97,13 +102,15 @@ export function TrackerHome() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSource, setSearchSource] = useState("all");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchProviderStats, setSearchProviderStats] = useState<Record<string, import("@/lib/api").ProviderSearchStat> | null>(null);
   const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
   const [kitsuMeta, setKitsuMeta] = useState<KitsuMetadata | null>(null);
   const [libraryFallbackPoster, setLibraryFallbackPoster] = useState<string | null>(null);
-  const [episodes, setEpisodes] = useState<{ number: number; label: string; url: string }[]>([]);
-  const [selectedEpisodes, setSelectedEpisodes] = useState<number[]>([]);
+  const [episodes, setEpisodes] = useState<SearchEpisode[]>([]);
+  const [selectedEpisodes, setSelectedEpisodes] = useState<string[]>([]);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [isLoadingMeta, setIsLoadingMeta] = useState(false);
+  const [deleteDialogTarget, setDeleteDialogTarget] = useState<AnimeView | null>(null);
 
   const selectVersionRef = useRef(0);
   const prevJobStatusRef = useRef<Map<string, string>>(new Map());
@@ -281,6 +288,7 @@ export function TrackerHome() {
         setMode((m) => m === "library" ? "search" : m === "search" ? "settings" : "library");
         return;
       }
+      if (deleteDialogTarget) return;
       if (mode !== "library") return;
       if (["ArrowDown", "j"].includes(e.key)) {
         e.preventDefault();
@@ -307,6 +315,11 @@ export function TrackerHome() {
         void handleScan();
         return;
       }
+      if (e.key === "x" && !isBusy) {
+        e.preventDefault();
+        handleDeleteFromLibrary();
+        return;
+      }
       if (e.key === "r" && !isBusy) {
         e.preventDefault();
         void refreshData();
@@ -316,7 +329,7 @@ export function TrackerHome() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, animes.length, isBusy, selected]);
+  }, [mode, animes.length, isBusy, selected, deleteDialogTarget]);
 
   useEffect(() => {
     let active = true;
@@ -383,20 +396,23 @@ export function TrackerHome() {
     }
   }
 
-  async function handleDeleteFromLibrary() {
-    if (!selected) return;
-    const confirmed = window.confirm(
-      `Remover "${selected.title}" da biblioteca?\n\nIsso remove o registro do banco (nao apaga arquivos locais).`
-    );
-    if (!confirmed) return;
+  function handleDeleteFromLibrary() {
+    if (!selected || isBusy) return;
+    setDeleteDialogTarget(selected);
+  }
+
+  async function handleConfirmDeleteFromLibrary() {
+    if (!deleteDialogTarget) return;
+    const target = deleteDialogTarget;
+    setDeleteDialogTarget(null);
 
     setIsBusy(true);
     try {
-      const res = await deleteLibraryAnime(selected.id);
+      const res = await deleteLibraryAnime(target.id);
       if (res?.error) {
         pushLog("library", `erro ao deletar: ${res.error}`);
       } else {
-        pushLog("library", `removido: ${selected.title}`);
+        pushLog("library", `removido: ${target.title}`);
         await refreshData();
       }
     } catch (e) {
@@ -477,6 +493,7 @@ export function TrackerHome() {
     if (searchQuery.trim().length < 2) return;
     setIsBusy(true);
     setSearchResults([]);
+    setSearchProviderStats(null);
     setSelectedResult(null);
     setKitsuMeta(null);
     setEpisodes([]);
@@ -484,6 +501,7 @@ export function TrackerHome() {
     try {
       const res = await searchAnime(searchQuery.trim(), searchSource);
       setSearchResults(res.results ?? []);
+      setSearchProviderStats(res.providerStats ?? null);
       pushLog("search", `"${searchQuery}" -> ${res.results?.length ?? 0} resultados`);
     } catch (e) {
       pushLog("search", `erro: ${(e as Error).message}`);
@@ -519,9 +537,12 @@ export function TrackerHome() {
     searchEpisodes({ provider: result.provider ?? searchSource, url: result.url, allAnimeId: result.allAnimeId ?? result.id })
       .then((res) => {
         if (selectVersionRef.current !== version) return;
-        const eps = res.episodes ?? [];
+        const eps: SearchEpisode[] = (res.episodes ?? []).map((episode, index) => ({
+          ...episode,
+          key: buildEpisodeKey(episode, index),
+        }));
         setEpisodes(eps);
-        setSelectedEpisodes(eps.slice(0, 1).map((e) => e.number));
+        setSelectedEpisodes(eps.slice(0, 1).map((e) => e.key));
         pushLog("search", `${result.title}: ${res.total} eps`);
       })
       .catch((e) => { if (selectVersionRef.current === version) pushLog("search", `eps erro: ${(e as Error).message}`); })
@@ -532,17 +553,21 @@ export function TrackerHome() {
     if (!selectedResult || selectedEpisodes.length === 0) return;
     setIsBusy(true);
     try {
-      const selectedSorted = [...selectedEpisodes].sort((a, b) => a - b);
-      const episodeUrlByNumber = new Map(episodes.map((ep) => [ep.number, ep.url]));
+      const selectedSet = new Set(selectedEpisodes);
+      const selectedEntries = episodes
+        .filter((ep) => selectedSet.has(ep.key))
+        .sort((a, b) => a.number - b.number);
 
       // Agrupa episódios por URL para minimizar chamadas à API e
       // valida antes de criar o registro na biblioteca
       const urlGroups = new Map<string, number[]>();
-      for (const epNumber of selectedSorted) {
-        const sourceUrl = episodeUrlByNumber.get(epNumber) ?? selectedResult.url ?? "";
+      for (const episode of selectedEntries) {
+        const sourceUrl = episode.url || selectedResult.url || "";
         if (!sourceUrl) continue;
         const group = urlGroups.get(sourceUrl) ?? [];
-        group.push(epNumber);
+        if (!group.includes(episode.number)) {
+          group.push(episode.number);
+        }
         urlGroups.set(sourceUrl, group);
       }
 
@@ -562,6 +587,9 @@ export function TrackerHome() {
         rating: kitsuMeta?.rating,
         kitsuId: kitsuMeta?.kitsuId,
       });
+      if (lib.reused) {
+        pushLog("library", `${selectedResult.title}: reutilizado registro existente`);
+      }
 
       let queuedCount = 0;
       for (const [sourceUrl, eps] of urlGroups) {
@@ -619,7 +647,7 @@ export function TrackerHome() {
       <div className="flex h-full flex-col gap-[10px] rounded-md border border-[#45475a] bg-[#0f0f14] p-[10px] shadow-[0_20px_50px_rgba(0,0,0,.8),inset_0_0_100px_rgba(0,0,0,.5)]">
         <header className="flex flex-col gap-2 text-[14px] md:flex-row md:items-center md:justify-between">
           <div className="font-extrabold tracking-[1px] text-[#cba6f7] drop-shadow-[0_0_4px_rgba(203,166,247,.35)]">
-            GOANIME-DOWNLOAD-TRACKER v2.0.1<span className="blink ml-1">_</span>
+            ANITRACKR-DOWNLOAD-TRACKER v2.0.1<span className="blink ml-1">_</span>
           </div>
 
           <nav className="flex gap-1">
@@ -704,16 +732,21 @@ export function TrackerHome() {
               onSearch={handleSearch}
               isBusy={isBusy}
               results={searchResults}
+              providerStats={searchProviderStats}
               selectedResult={selectedResult}
               onSelectResult={handleSelectResult}
               kitsuMeta={kitsuMeta}
               isLoadingMeta={isLoadingMeta}
               episodes={episodes}
               selectedEpisodes={selectedEpisodes}
-              onToggleEpisode={(n) =>
-                setSelectedEpisodes((cur) => (cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n]))
+              onToggleEpisode={(episodeKey) =>
+                setSelectedEpisodes((cur) =>
+                  cur.includes(episodeKey)
+                    ? cur.filter((key) => key !== episodeKey)
+                    : [...cur, episodeKey]
+                )
               }
-              onSelectAll={() => setSelectedEpisodes(episodes.map((e) => e.number))}
+              onSelectAll={() => setSelectedEpisodes(episodes.map((e) => e.key))}
               onClearAll={() => setSelectedEpisodes([])}
               isLoadingEpisodes={isLoadingEpisodes}
               downloadPath={downloadPath}
@@ -727,7 +760,7 @@ export function TrackerHome() {
 
         <footer className="flex shrink-0 flex-col gap-1 border-t border-[#45475a] pt-[8px] text-[11px] text-[#6c7086] md:flex-row md:items-center md:justify-between">
           <div>
-            <span className="text-[#cba6f7]">goanime</span> download-tracker --scan --queue --missing
+            <span className="text-[#cba6f7]">anitrackr</span> download-tracker --scan --queue --missing
           </div>
           <div>
             <span className="font-bold text-[#cba6f7]">Tab</span> Switch ·{" "}
@@ -738,6 +771,25 @@ export function TrackerHome() {
           </div>
         </footer>
       </div>
+      <ConfirmDialog
+        open={!!deleteDialogTarget}
+        title="Remover Da Biblioteca?"
+        message={
+          deleteDialogTarget ? (
+            <>
+              Remover <span className="font-bold text-[#e0e0ed]">"{deleteDialogTarget.title}"</span> da biblioteca?
+              <br />
+              <br />
+              Isso remove apenas o registro do banco. Arquivos locais nao sao apagados.
+            </>
+          ) : null
+        }
+        confirmLabel="Remover"
+        cancelLabel="Cancelar"
+        busy={isBusy}
+        onCancel={() => setDeleteDialogTarget(null)}
+        onConfirm={() => void handleConfirmDeleteFromLibrary()}
+      />
     </div>
   );
 }

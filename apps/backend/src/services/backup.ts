@@ -8,7 +8,7 @@ import { join } from "path";
 import db, { DATA_ROOT } from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 
-const BACKUP_DIR = join(DATA_ROOT, ".goanime", "backups");
+const BACKUP_DIR = join(DATA_ROOT, ".anitrackr", "backups");
 const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
 const MAX_BACKUPS = 4;
 const CONFIG_KEY = "last_backup_at";

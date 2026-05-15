@@ -1,0 +1,58 @@
+name: Feature request
+description: Sugerir melhoria ou nova funcionalidade
+title: "[FEATURE] "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Valeu pela sugestao.
+        Descreva impacto e caso de uso para priorizacao.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema atual
+      description: Que dor isso resolve?
+      placeholder: Ex: fluxo de enfileirar episodios exige repeticao manual
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Solucao proposta
+      description: Como voce imagina a feature funcionando
+      placeholder: Ex: botao para enfileirar intervalo de episodios com 1 clique
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      placeholder: Ex: script externo / ajuste na config / workaround atual
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Criterios de aceite
+      description: O que precisa estar pronto para considerar concluido
+      placeholder: |
+        - [ ] criterio 1
+        - [ ] criterio 2
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Area principal
+      options:
+        - frontend (apps/web)
+        - backend (apps/backend)
+        - providers/scraping
+        - downloads/queue
+        - docker/deploy
+        - docs
+    validations:
+      required: true
+

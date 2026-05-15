@@ -3,13 +3,13 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "goanime-trackear",
+      "name": "anitrackr",
       "devDependencies": {
         "concurrently": "^9.2.1",
       },
     },
     "apps/backend": {
-      "name": "@goanime-trackear/backend",
+      "name": "@anitrackr/backend",
       "version": "1.0.0",
       "dependencies": {
         "@elysiajs/cors": "1.4.2",
@@ -21,7 +21,7 @@
       },
     },
     "apps/web": {
-      "name": "@goanime-trackear/web",
+      "name": "@anitrackr/web",
       "version": "0.1.0",
       "dependencies": {
         "next": "16.2.6",
@@ -104,9 +104,9 @@
 
     "@eslint/plugin-kit": ["@eslint/plugin-kit@0.4.1", "", { "dependencies": { "@eslint/core": "^0.17.0", "levn": "^0.4.1" } }, "sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA=="],
 
-    "@goanime-trackear/backend": ["@goanime-trackear/backend@workspace:apps/backend"],
+    "@anitrackr/backend": ["@anitrackr/backend@workspace:apps/backend"],
 
-    "@goanime-trackear/web": ["@goanime-trackear/web@workspace:apps/web"],
+    "@anitrackr/web": ["@anitrackr/web@workspace:apps/web"],
 
     "@humanfs/core": ["@humanfs/core@0.19.2", "", { "dependencies": { "@humanfs/types": "^0.15.0" } }, "sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA=="],
 

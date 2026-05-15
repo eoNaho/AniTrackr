@@ -8,8 +8,8 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GoAnime Trackear",
-  description: "Painel local para rastrear downloads, episodios faltantes e a fila do GoAnime.",
+  title: "AniTrackr",
+  description: "Painel local para rastrear downloads, episodios faltantes e a fila do AniTrackr.",
 };
 
 export default function RootLayout({

@@ -1,17 +1,12 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: apps/backend/Dockerfile
+    image: ghcr.io/${ANITRACKR_IMAGE_OWNER:-eonaho}/${ANITRACKR_IMAGE_REPO:-anitrackr}-backend:${ANITRACKR_IMAGE_TAG:-latest}
     container_name: anitrackr-backend
     restart: unless-stopped
     environment:
       PORT: "3001"
       ANITRACKR_DATA_DIR: /data
       ANITRACKR_DOWNLOAD_PATH: /downloads
-      # Opcional: se quiser usar path fixo diferente no binário
-      # YT_DLP_PATH: /usr/bin/yt-dlp
-      # FFMPEG_PATH: /usr/bin/ffmpeg
     volumes:
       - anitrackr_data:/data
       - anitrackr_downloads:/downloads
@@ -25,13 +20,7 @@ services:
       start_period: 20s
 
   web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-      args:
-        # Sem NEXT_PUBLIC_BACKEND_URL => frontend usa mesma origem e Next faz proxy interno para backend
-        NEXT_PUBLIC_BACKEND_URL: ""
-        BACKEND_INTERNAL_URL: "http://backend:3001"
+    image: ghcr.io/${ANITRACKR_IMAGE_OWNER:-eonaho}/${ANITRACKR_IMAGE_REPO:-anitrackr}-web:${ANITRACKR_IMAGE_TAG:-latest}
     container_name: anitrackr-web
     restart: unless-stopped
     depends_on:

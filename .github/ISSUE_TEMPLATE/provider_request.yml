@@ -1,0 +1,109 @@
+name: Provider request
+description: Solicitar suporte a novo provider (site/fonte)
+title: "[PROVIDER] "
+labels: ["provider-request", "enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use este formulario para pedir suporte a um novo provider.
+        Quanto mais detalhes tecnicos, mais rapido fica para implementar.
+
+  - type: input
+    id: provider_name
+    attributes:
+      label: Nome do provider
+      placeholder: Ex: anirena
+    validations:
+      required: true
+
+  - type: input
+    id: provider_url
+    attributes:
+      label: URL base do provider
+      placeholder: Ex: https://exemplo.com
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider_type
+    attributes:
+      label: Tipo de fonte
+      options:
+        - streaming pagina (yt-dlp / extractor)
+        - api/json
+        - torrent
+        - outro
+    validations:
+      required: true
+
+  - type: textarea
+    id: search_example
+    attributes:
+      label: Exemplo de busca
+      description: Link da busca ou como reproduzir uma busca manual
+      placeholder: Ex: https://site.com/search?q=fire+force
+    validations:
+      required: true
+
+  - type: textarea
+    id: anime_example
+    attributes:
+      label: Exemplo de pagina de anime
+      description: URL da serie que deve funcionar no provider
+      placeholder: Ex: https://site.com/anime/fire-force-season-3
+    validations:
+      required: true
+
+  - type: textarea
+    id: episode_example
+    attributes:
+      label: Exemplo de pagina de episodio
+      description: URL direta de episodio, se existir
+      placeholder: Ex: https://site.com/anime/fire-force-season-3/episodio-1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: anti_bot
+    attributes:
+      label: Possui protecao anti-bot?
+      options:
+        - nao
+        - cloudflare leve
+        - cloudflare forte/turnstile
+        - captcha
+        - desconheco
+    validations:
+      required: true
+
+  - type: dropdown
+    id: requires_login
+    attributes:
+      label: Exige login para assistir/baixar?
+      options:
+        - nao
+        - sim
+        - parcial (alguns links)
+    validations:
+      required: true
+
+  - type: textarea
+    id: extraction_notes
+    attributes:
+      label: Observacoes tecnicas
+      description: Headers, referer, player, iframe, m3u8/mp4, limitacoes, etc
+      placeholder: Ex: stream fica em iframe X e requer Referer especifico
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Criterios de aceite
+      placeholder: |
+        - [ ] Buscar anime no provider
+        - [ ] Listar episodios
+        - [ ] Enfileirar episodio individual
+        - [ ] Download real sem simulacao
+    validations:
+      required: true
+

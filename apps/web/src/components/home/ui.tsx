@@ -71,7 +71,7 @@ export function Panel({
 }) {
   return (
     <section
-      className={`relative border bg-[#1a1a24] pt-4 ${ // pt-4 para garantir espaço real
+      className={`relative flex flex-col border bg-[#1a1a24] pt-4 ${
         focused
           ? "border-[#cba6f7] shadow-[0_0_8px_rgba(203,166,247,.14)]"
           : "border-[#45475a]"
@@ -84,7 +84,7 @@ export function Panel({
       >
         {title}
       </div>
-      <div className="h-full w-full overflow-hidden"> {/* Container interno para proteger o overflow do conteúdo sem cortar o título */}
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden w-full">
         {children}
       </div>
     </section>
@@ -192,5 +192,95 @@ export function ActionBtn({
       </span>
       {label}
     </button>
+  );
+}
+
+export function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmLabel = "Confirmar",
+  cancelLabel = "Cancelar",
+  variant = "danger",
+  busy = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  message: React.ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: "danger" | "success" | "default";
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  React.useEffect(() => {
+    if (!open) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        onCancel();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, onCancel, open]);
+
+  if (!open) return null;
+
+  const palette =
+    variant === "danger"
+      ? {
+          accentText: "text-[#f38ba8]",
+          cancelHover: "hover:border-[#f38ba8] hover:text-[#f38ba8]",
+          confirmBtn:
+            "border border-[#f38ba8] bg-[#f38ba8]/10 text-[#f38ba8] hover:bg-[#f38ba8] hover:text-[#0f0f14]",
+        }
+      : variant === "success"
+      ? {
+          accentText: "text-[#a6e3a1]",
+          cancelHover: "hover:border-[#a6e3a1] hover:text-[#a6e3a1]",
+          confirmBtn:
+            "border border-[#a6e3a1] bg-[#a6e3a1]/10 text-[#a6e3a1] hover:bg-[#a6e3a1] hover:text-[#0f0f14]",
+        }
+      : {
+          accentText: "text-[#cba6f7]",
+          cancelHover: "hover:border-[#cba6f7] hover:text-[#cba6f7]",
+          confirmBtn:
+            "border border-[#cba6f7] bg-[#cba6f7]/10 text-[#cba6f7] hover:bg-[#cba6f7] hover:text-[#0f0f14]",
+        };
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4">
+      <div className="w-full max-w-[520px] border border-[#45475a] bg-[#0f0f14] p-4 shadow-[0_20px_50px_rgba(0,0,0,.8)]">
+        <div className={`mb-2 text-[11px] font-bold uppercase tracking-wider ${palette.accentText}`}>[confirm action]</div>
+        <h3 className="mb-3 text-[16px] font-extrabold text-[#cba6f7]">{title}</h3>
+        <div className="border-l-2 border-[#45475a] bg-black/20 px-3 py-2 text-[13px] leading-[1.6] text-[#bac2de]">
+          {message}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className={`border border-[#45475a] px-3 py-2 text-[12px] font-bold uppercase text-[#6c7086] ${palette.cancelHover} disabled:cursor-not-allowed disabled:opacity-40`}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className={`${palette.confirmBtn} px-3 py-2 text-[12px] font-bold uppercase disabled:cursor-not-allowed disabled:opacity-40`}
+          >
+            {busy ? "processando..." : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

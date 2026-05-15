@@ -73,6 +73,23 @@ function asNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function normalizeSourceRef(value: string | null): string | null {
+  if (!value) return null;
+  const raw = value.trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw);
+    parsed.hash = "";
+    if (parsed.pathname.length > 1) {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    }
+    return parsed.toString();
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
+}
+
 function asFiniteNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
@@ -210,13 +227,137 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       seasonNumber, tags, genres, sourceUrl, asciiArt,
     } = body as CreateLibraryPayload;
 
-    const id = randomUUID();
     const titleValue = asString(title, "").trim() || "Untitled";
+    const providerValue = asString(provider, "animefire");
+    const sourceUrlValue = normalizeSourceRef(asNullableString(sourceUrl));
+    const kitsuIdValue = asNullableString(kitsuId);
+    const anilistIdValue = asNullableFiniteNumber(anilistId);
+    const malIdValue = asNullableFiniteNumber(malId);
+    const localPathValue = asString(localPath, "");
+    const episodeCountValue = asFiniteNumber(episodeCount, 0);
+    const ratingValue = asNullableFiniteNumber(rating);
+    const yearValue = asNullableFiniteNumber(year);
+    const seasonNumberValue = asFiniteNumber(seasonNumber, 1);
+
+    let existing = null as { id: string } | null;
+    if (sourceUrlValue) {
+      existing = db.query<{ id: string }, [string, string]>(
+        `SELECT id
+         FROM animes
+         WHERE provider = ? AND source_url = ?
+         ORDER BY updated_at DESC
+         LIMIT 1`
+      ).get(providerValue, sourceUrlValue) ?? null;
+    }
+
+    if (!existing && kitsuIdValue) {
+      existing = db.query<{ id: string }, [string]>(
+        `SELECT id FROM animes WHERE kitsu_id = ? ORDER BY updated_at DESC LIMIT 1`
+      ).get(kitsuIdValue) ?? null;
+    }
+
+    if (!existing && anilistIdValue != null) {
+      existing = db.query<{ id: string }, [number]>(
+        `SELECT id FROM animes WHERE anilist_id = ? ORDER BY updated_at DESC LIMIT 1`
+      ).get(anilistIdValue) ?? null;
+    }
+
+    if (!existing && malIdValue != null) {
+      existing = db.query<{ id: string }, [number]>(
+        `SELECT id FROM animes WHERE mal_id = ? ORDER BY updated_at DESC LIMIT 1`
+      ).get(malIdValue) ?? null;
+    }
+
+    if (!existing) {
+      existing = db.query<{ id: string }, [string, string, string, string]>(
+        `SELECT id
+         FROM animes
+         WHERE (
+           lower(trim(title)) = lower(trim(?))
+           OR lower(trim(COALESCE(title_english, ''))) = lower(trim(?))
+           OR lower(trim(COALESCE(title_romaji, ''))) = lower(trim(?))
+         )
+         ORDER BY CASE WHEN provider = ? THEN 1 ELSE 0 END DESC, updated_at DESC
+         LIMIT 1`
+      ).get(titleValue, titleValue, titleValue, providerValue) ?? null;
+    }
+
+    if (existing) {
+      db.run(
+        `UPDATE animes
+         SET
+           title = COALESCE(NULLIF(title, ''), ?),
+           title_english = COALESCE(NULLIF(title_english, ''), ?),
+           title_romaji = COALESCE(NULLIF(title_romaji, ''), ?),
+           title_native = COALESCE(NULLIF(title_native, ''), ?),
+           alt_title = COALESCE(NULLIF(alt_title, ''), ?),
+           synopsis = COALESCE(NULLIF(synopsis, ''), ?),
+           poster_url = COALESCE(NULLIF(poster_url, ''), ?),
+           cover_url = COALESCE(NULLIF(cover_url, ''), ?),
+           kitsu_id = COALESCE(kitsu_id, ?),
+           anilist_id = COALESCE(anilist_id, ?),
+           mal_id = COALESCE(mal_id, ?),
+           rating = CASE
+             WHEN (rating IS NULL OR rating = 0) AND ? IS NOT NULL THEN ?
+             ELSE rating
+           END,
+           episode_count = CASE
+             WHEN ? > episode_count THEN ?
+             ELSE episode_count
+           END,
+           episode_length = COALESCE(episode_length, ?),
+           quality = COALESCE(NULLIF(quality, ''), ?),
+           local_path = CASE
+             WHEN (local_path IS NULL OR local_path = '') AND ? <> '' THEN ?
+             ELSE local_path
+           END,
+           year = COALESCE(year, ?),
+           season_number = CASE
+             WHEN season_number IS NULL OR season_number <= 0 THEN ?
+             ELSE season_number
+           END,
+           source_url = COALESCE(NULLIF(source_url, ''), ?),
+           ascii_art = COALESCE(NULLIF(ascii_art, ''), ?),
+           updated_at = datetime('now')
+         WHERE id = ?`,
+        [
+          titleValue,
+          asNullableString(titleEnglish),
+          asNullableString(titleRomaji),
+          asNullableString(titleNative),
+          asNullableString(altTitle),
+          asNullableString(synopsis),
+          asNullableString(posterUrl),
+          asNullableString(coverUrl),
+          kitsuIdValue,
+          anilistIdValue,
+          malIdValue,
+          ratingValue,
+          ratingValue,
+          episodeCountValue,
+          episodeCountValue,
+          asNullableFiniteNumber(episodeLength),
+          asString(quality, "1080p"),
+          localPathValue,
+          localPathValue,
+          yearValue,
+          seasonNumberValue,
+          sourceUrlValue,
+          asString(asciiArt, ""),
+          existing.id,
+        ]
+      );
+
+      logger.info("library", `reused existing "${titleValue}" (id=${existing.id})`);
+      return { ok: true, id: existing.id, reused: true };
+    }
+
+    const id = randomUUID();
     const values: SQLQueryBindings[] = [
       id,
-      asNullableString(kitsuId),
-      asNullableFiniteNumber(anilistId),
-      asNullableFiniteNumber(malId),
+      kitsuIdValue,
+      anilistIdValue,
+      malIdValue,
       titleValue,
       asNullableString(titleEnglish),
       asNullableString(titleRomaji),
@@ -225,20 +366,20 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       asNullableString(synopsis),
       asNullableString(posterUrl),
       asNullableString(coverUrl),
-      asNullableFiniteNumber(rating),
+      ratingValue,
       asString(kitsuStatus, "unknown"),
       asString(anilistStatus, "unknown"),
       asString(subtype, "TV"),
-      asFiniteNumber(episodeCount, 0),
+      episodeCountValue,
       asNullableFiniteNumber(episodeLength),
       asString(quality, "1080p"),
-      asString(provider, "animefire"),
-      asString(localPath, ""),
-      asNullableFiniteNumber(year),
-      asFiniteNumber(seasonNumber, 1),
+      providerValue,
+      localPathValue,
+      yearValue,
+      seasonNumberValue,
       Array.isArray(tags) ? JSON.stringify(tags) : "[]",
       Array.isArray(genres) ? JSON.stringify(genres) : "[]",
-      asNullableString(sourceUrl),
+      sourceUrlValue,
       asString(asciiArt, ""),
     ];
     db.run(`

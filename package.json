@@ -1,5 +1,5 @@
 {
-  "name": "goanime-trackear",
+  "name": "anitrackr",
   "private": true,
   "packageManager": "bun@1.3.12",
   "workspaces": [
@@ -7,14 +7,17 @@
   ],
   "scripts": {
     "dev": "concurrently -k -n web,backend -c cyan,green \"bun run dev:web\" \"bun run dev:backend\"",
-    "dev:web": "bun run --filter @goanime-trackear/web dev",
-    "dev:backend": "bun run --filter @goanime-trackear/backend dev",
-    "build": "bun run --filter @goanime-trackear/web build",
-    "start": "bun run --filter @goanime-trackear/backend start",
-    "lint": "bun run --filter @goanime-trackear/web lint",
+    "dev:web": "bun run --filter @anitrackr/web dev",
+    "dev:backend": "bun run --filter @anitrackr/backend dev",
+    "build": "bun run --filter @anitrackr/web build",
+    "start": "bun run --filter @anitrackr/backend start",
+    "lint": "bun run --filter @anitrackr/web lint",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f --tail=150"
+    "docker:logs": "docker compose logs -f --tail=150",
+    "docker:pull:image": "docker compose -f docker-compose.images.yml pull",
+    "docker:up:image": "docker compose -f docker-compose.images.yml up -d",
+    "docker:logs:image": "docker compose -f docker-compose.images.yml logs -f --tail=150"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

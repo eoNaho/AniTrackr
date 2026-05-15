@@ -1,5 +1,5 @@
 {
-  "name": "@goanime-trackear/backend",
+  "name": "@anitrackr/backend",
   "version": "1.0.0",
   "module": "src/index.ts",
   "type": "module",

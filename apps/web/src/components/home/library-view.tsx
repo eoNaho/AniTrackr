@@ -2,7 +2,8 @@
 
 import React, { useMemo, useState } from "react";
 import type { DownloadJob } from "@/lib/api";
-import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, generateBar, statusBadgeClass, statusColor } from "./ui";
+import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan } from "@/lib/api";
+import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, ConfirmDialog, generateBar, statusBadgeClass, statusColor } from "./ui";
 import { EpisodeList } from "./episode-list";
 
 type Props = {
@@ -72,6 +73,12 @@ export function LibraryView({
 }: Props) {
   const [filter, setFilter] = useState("");
   const [sortBy, setSortBy] = useState("title");
+  const [nfoStatus, setNfoStatus] = useState<string | null>(null);
+  const [metaStatus, setMetaStatus] = useState<string | null>(null);
+  const [isRunningNfo, setIsRunningNfo] = useState(false);
+  const [isRunningMeta, setIsRunningMeta] = useState(false);
+  const [queueConfirmAction, setQueueConfirmAction] = useState<"cancel-all" | "clear-monitor" | null>(null);
+  const [queueConfirmBusy, setQueueConfirmBusy] = useState(false);
 
   const filteredAnimes = useMemo(() => {
     const q = filter.toLowerCase();
@@ -101,9 +108,82 @@ export function LibraryView({
   const streamText = streamState === "live" ? "SSE live" : streamState === "fallback" ? "fallback polling" : "connecting";
   const streamClass = streamState === "live" ? "text-[#a6e3a1]" : streamState === "fallback" ? "text-[#f9e2af]" : "text-[#6c7086]";
 
+  async function handleGenerateSelectedNfo() {
+    if (!selected) return;
+    setIsRunningNfo(true);
+    setNfoStatus(`gerando NFO de "${selected.title}"...`);
+    try {
+      const res = await generateJellyfinNfo(selected.id, true);
+      setNfoStatus(`ok: ${res.episodesNfo} episode.nfo + tvshow.nfo`);
+    } catch (err) {
+      setNfoStatus(`erro: ${(err as Error).message}`);
+    } finally {
+      setIsRunningNfo(false);
+    }
+  }
+
+  async function handleGenerateAllNfo() {
+    setIsRunningNfo(true);
+    setNfoStatus("gerando NFO da biblioteca...");
+    try {
+      const res = await generateAllJellyfinNfo(false);
+      setNfoStatus(`ok: ${res.done}/${res.total} animes processados`);
+    } catch (err) {
+      setNfoStatus(`erro: ${(err as Error).message}`);
+    } finally {
+      setIsRunningNfo(false);
+    }
+  }
+
+  async function handleEnrichSelectedJikan() {
+    if (!selected) return;
+    setIsRunningMeta(true);
+    setMetaStatus(`Jikan enrich: "${selected.title}"...`);
+    try {
+      const res = await enrichAnimeJikan(selected.id);
+      setMetaStatus(`Jikan ok: ${res.enriched}/${res.total} episodios`);
+      onRefresh();
+    } catch (err) {
+      setMetaStatus(`Jikan erro: ${(err as Error).message}`);
+    } finally {
+      setIsRunningMeta(false);
+    }
+  }
+
+  async function handleEnrichSelectedAniList() {
+    if (!selected) return;
+    setIsRunningMeta(true);
+    setMetaStatus(`AniList enrich: "${selected.title}"...`);
+    try {
+      const res = await enrichAnimeAnilist(selected.id);
+      if (!res.ok) throw new Error(res.error ?? "falha ao enriquecer");
+      setMetaStatus(`AniList ok: id ${res.anilistId ?? "?"}`);
+      onRefresh();
+    } catch (err) {
+      setMetaStatus(`AniList erro: ${(err as Error).message}`);
+    } finally {
+      setIsRunningMeta(false);
+    }
+  }
+
+  async function handleConfirmQueueAction() {
+    if (!queueConfirmAction) return;
+    setQueueConfirmBusy(true);
+    try {
+      if (queueConfirmAction === "cancel-all") {
+        await onCancelAllDownloads();
+      } else {
+        await onClearQueueMonitor();
+      }
+      setQueueConfirmAction(null);
+    } finally {
+      setQueueConfirmBusy(false);
+    }
+  }
+
   return (
   <div className="grid h-full w-full gap-[14px] overflow-hidden xl:grid-cols-[45%_1fr] xl:grid-rows-[1fr_300px]">
-      <Panel title="Downloads :: Biblioteca Local" focused className="flex min-h-0 flex-col">
+      <Panel title="Downloads :: Biblioteca Local" focused className="min-h-0">
         <div className="grid grid-cols-2 gap-2 border-b border-dashed border-[#45475a] p-3 md:grid-cols-4">
           <StatBox label="Queued" value={queuedCount} command="queue.len()" />
           <StatBox label="Complete" value={downloadedTitles} command="--done" />
@@ -134,7 +214,7 @@ export function LibraryView({
           <span>Titulo {filter && <span className="text-[#cba6f7]">({filteredAnimes.length}/{animes.length})</span>}</span>
           <span className="hidden md:block">Status · Progresso · Eps</span>
         </div>
-        <div className="flex-1 overflow-auto py-1">
+        <div className="flex-1 min-h-0 overflow-y-auto py-1">
           {animes.length === 0 ? (
             <div className="px-4 py-6 text-[13px] text-[#6c7086]">
               Biblioteca vazia. Use a aba <span className="text-[#cba6f7]">[SEARCH]</span> para adicionar animes.
@@ -158,13 +238,13 @@ export function LibraryView({
         </div>
       </Panel>
 
-      <Panel title="Detalhes do Download" className="flex min-h-0 flex-col">
+      <Panel title="Detalhes do Download" className="min-h-0">
         {!selected ? (
           <div className="flex h-full items-center justify-center text-[13px] text-[#6c7086]">
             Nenhum anime selecionado
           </div>
         ) : (
-          <div className="grid h-full gap-4 overflow-auto p-4 lg:grid-cols-[200px_1fr]">
+          <div className="grid flex-1 min-h-0 gap-4 overflow-y-auto p-4 lg:grid-cols-[200px_1fr]">
             <div className="flex flex-col gap-3">
               {selected.posterUrl || fallbackPosterUrl ? (
                 <div className="overflow-hidden border border-dashed border-[#45475a]">
@@ -296,6 +376,42 @@ export function LibraryView({
                 </div>
               </div>
 
+              <div className="border border-dashed border-[#45475a] bg-black/20 p-3">
+                <div className="mb-2 text-[12px] font-bold text-[#89dceb]">-- JELLYFIN / METADATA --</div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <ActionBtn
+                    kbd="n"
+                    label="Gerar NFO (anime)"
+                    onClick={() => void handleGenerateSelectedNfo()}
+                    disabled={isBusy || isRunningNfo}
+                  />
+                  <ActionBtn
+                    kbd="N"
+                    label="Gerar NFO (biblioteca)"
+                    onClick={() => void handleGenerateAllNfo()}
+                    disabled={isBusy || isRunningNfo}
+                  />
+                  <ActionBtn
+                    kbd="j"
+                    label="Enriquecer episodios (Jikan)"
+                    onClick={() => void handleEnrichSelectedJikan()}
+                    disabled={isBusy || isRunningMeta}
+                  />
+                  <ActionBtn
+                    kbd="a"
+                    label="Enriquecer anime (AniList)"
+                    onClick={() => void handleEnrichSelectedAniList()}
+                    disabled={isBusy || isRunningMeta}
+                  />
+                </div>
+                {(nfoStatus || metaStatus) && (
+                  <div className="mt-2 border-l-2 border-[#45475a] bg-black/20 px-2 py-1 text-[11px] text-[#bac2de]">
+                    {nfoStatus && <div>{nfoStatus}</div>}
+                    {metaStatus && <div>{metaStatus}</div>}
+                  </div>
+                )}
+              </div>
+
               <div className="mt-auto grid gap-2 border border-dashed border-[#45475a] bg-black/20 p-3 text-[12px] md:grid-cols-2">
                 <ActionBtn kbd="d" label="Download missing eps" onClick={onQueueMissing} disabled={isBusy} />
                 <ActionBtn kbd="b" label="Queue missing all" onClick={onQueueMissingAll} disabled={isBusy} />
@@ -308,8 +424,8 @@ export function LibraryView({
         )}
       </Panel>
 
-      <Panel title={`Queue Monitor :: ${streamText}`} className="xl:col-span-2 flex min-h-0 flex-col overflow-hidden">
-        <div className="flex h-full min-h-0 flex-col">
+      <Panel title={`Queue Monitor :: ${streamText}`} className="xl:col-span-2 min-h-0">
+        <div className="flex flex-1 min-h-0 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-dashed border-[#45475a] px-4 py-2 text-[11px]">
           <span className={`font-bold uppercase ${streamClass}`}>{streamText}</span>
           <span className="text-[#6c7086]">active: {activeDownloads.length}</span>
@@ -328,13 +444,13 @@ export function LibraryView({
               retry failed
             </button>
             <button
-              onClick={onCancelAllDownloads}
+              onClick={() => setQueueConfirmAction("cancel-all")}
               className="border border-[#45475a] px-2 py-1 text-[#f38ba8] hover:bg-[#f38ba8] hover:text-[#0f0f14]"
             >
               cancel all
             </button>
             <button
-              onClick={onClearQueueMonitor}
+              onClick={() => setQueueConfirmAction("clear-monitor")}
               className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
             >
               clear monitor
@@ -407,6 +523,28 @@ export function LibraryView({
         </div>
         </div>
       </Panel>
+      <ConfirmDialog
+        open={queueConfirmAction === "cancel-all"}
+        title="Cancelar Todos Os Downloads Ativos?"
+        message="Isso vai cancelar todos os jobs em queued/downloading/retry_wait da fila atual."
+        confirmLabel="Cancelar tudo"
+        cancelLabel="Voltar"
+        variant="danger"
+        busy={queueConfirmBusy}
+        onCancel={() => setQueueConfirmAction(null)}
+        onConfirm={() => void handleConfirmQueueAction()}
+      />
+      <ConfirmDialog
+        open={queueConfirmAction === "clear-monitor"}
+        title="Limpar Monitor Da Fila?"
+        message="Isso remove do monitor os registros finalizados (completed/failed/cancelled). Nao apaga arquivos baixados."
+        confirmLabel="Limpar monitor"
+        cancelLabel="Voltar"
+        variant="success"
+        busy={queueConfirmBusy}
+        onCancel={() => setQueueConfirmAction(null)}
+        onConfirm={() => void handleConfirmQueueAction()}
+      />
     </div>
   );
 }

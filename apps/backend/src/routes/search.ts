@@ -55,25 +55,27 @@ export const searchRoutes = new Elysia({ prefix: "/search" })
       };
     }
     if (source === "dattebayo") {
-      const results = await searchAllProviders(q, ["dattebayo"]);
-      return { source: "dattebayo", total: results.length, results };
+      const { results, providerStats } = await searchAllProviders(q, ["dattebayo"]);
+      return { source: "dattebayo", total: results.length, results, providerStats };
     }
     if (source === "nineanime") {
-      const results = await searchAllProviders(q, ["nineanime"]);
-      return { source: "nineanime", total: results.length, results };
+      const { results, providerStats } = await searchAllProviders(q, ["nineanime"]);
+      return { source: "nineanime", total: results.length, results, providerStats };
     }
     if (source === "animedrive") {
-      const results = await searchAllProviders(q, ["animedrive"]);
-      return { source: "animedrive", total: results.length, results };
+      const { results, providerStats } = await searchAllProviders(q, ["animedrive"]);
+      return { source: "animedrive", total: results.length, results, providerStats };
     }
     if (source === "superflix") {
-      const results = await searchAllProviders(q, ["superflix"]);
-      return { source: "superflix", total: results.length, results };
+      const { results, providerStats } = await searchAllProviders(q, ["superflix"]);
+      return { source: "superflix", total: results.length, results, providerStats };
     }
 
     // "all" — todos os providers em paralelo
-    const results = await searchAllProviders(q, ["animefire", "goyabu", "allanime", "nineanime", "animedrive", "superflix", "dattebayo"]);
-    return { source: "all", total: results.length, results };
+    const { results, providerStats } = await searchAllProviders(q, [
+      "animefire", "goyabu", "allanime", "nineanime", "animedrive", "superflix", "dattebayo",
+    ]);
+    return { source: "all", total: results.length, results, providerStats };
   }, {
     query: t.Object({
       q: t.Optional(t.String()),

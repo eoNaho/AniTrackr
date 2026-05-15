@@ -99,6 +99,7 @@ function StatsPanel() {
   const [autoSched, setAutoSched] = useState<{ active: boolean; intervalHours: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,7 +120,13 @@ function StatsPanel() {
 
   async function handleRunNow() {
     setRunning(true);
-    try { await triggerAutoSchedule(); await load(); }
+    setRunError(null);
+    try {
+      await triggerAutoSchedule();
+      await load();
+    } catch (e) {
+      setRunError((e as Error).message);
+    }
     finally { setRunning(false); }
   }
 
@@ -224,6 +231,11 @@ function StatsPanel() {
               </Btn>
             </div>
           </div>
+          {runError && (
+            <div className="mt-2 text-[11px] text-[#f38ba8]">
+              {runError}
+            </div>
+          )}
         </div>
       </div>
     </Panel>
@@ -289,7 +301,7 @@ function ProviderHealthPanel() {
               return (
                 <div key={name} className="flex items-center justify-between border border-[#2a2a38] bg-[#0d0d12] px-2 py-[6px]">
                   <span className="text-[#6c7086] uppercase">[{name}]</span>
-                  <span className="text-[#6c7086] text-[11px]">● closed (sem dados)</span>
+                  <span className="text-[#a6e3a1] text-[11px]">● closed</span>
                 </div>
               );
             }

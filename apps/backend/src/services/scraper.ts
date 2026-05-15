@@ -41,6 +41,25 @@ function resolveUrl(base: string, href: string): string {
   return `${base}/${href}`;
 }
 
+function extractEpisodeNumber(label: string, fallback: number): number {
+  const normalized = label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  const explicitEpisode = normalized.match(/\b(?:episodio|ep)\s*\.?\s*(\d{1,4})\b/i);
+  if (explicitEpisode) {
+    const parsed = parseInt(explicitEpisode[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  const allNums = Array.from(normalized.matchAll(/\d{1,4}/g))
+    .map((m) => parseInt(m[0], 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (allNums.length > 0) return allNums[allNums.length - 1];
+
+  return fallback;
+}
+
 // ─── AnimeFire ───────────────────────────────────────────────────────────────
 
 export async function animefireSearch(query: string): Promise<ScrapeResult[]> {
@@ -96,8 +115,7 @@ export async function animefireEpisodes(animeUrl: string): Promise<Episode[]> {
     $("a.lEp.epT.divNumEp.smallbox.px-2.mx-1.text-left.d-flex").each((i, el) => {
       const text = $(el).text().trim();
       const href = $(el).attr("href");
-      const match = text.match(/\d+/);
-      const num = match ? parseInt(match[0]) : i + 1;
+      const num = extractEpisodeNumber(text, i + 1);
       if (href) {
         episodes.push({ number: num, label: text || `Episódio ${num}`, url: resolveUrl(BASE_ANIMEFIRE, href) });
       }

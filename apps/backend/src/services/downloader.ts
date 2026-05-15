@@ -7,6 +7,7 @@ import { buildPath } from "./naming.ts";
 import { getAllAnimeStreamUrl, searchAllAnime } from "./allanime.ts";
 import { animefireEpisodes, animefireSearch } from "./scraper.ts";
 import { resolveDownloadSourceUrl } from "./source-resolver.ts";
+import { generateSingleEpisodeNfoAsync } from "./jellyfin.ts";
 
 export type DownloadStatus = "queued" | "downloading" | "retry_wait" | "completed" | "failed" | "cancelled";
 const DOWNLOAD_UA =
@@ -544,6 +545,9 @@ function completeJob(jobId: string, animeId: string, episode: number, season: nu
   updateAnimeDownloadState(animeId);
 
   logger.info("downloader", JSON.stringify({ event: "completed", jobId, animeId, episode, season, bytes: totalBytes }));
+
+  // Gera NFO Jellyfin e busca metadados Jikan de forma assíncrona (não bloqueia)
+  void generateSingleEpisodeNfoAsync(animeId, episode, season, filePath);
 }
 
 function simulateDownload(jobId: string, animeId: string, episode: number, season: number) {
@@ -635,11 +639,15 @@ async function realDownload(
     // noop
   }
 
+  // %(ext)s evita que yt-dlp injete IDs de formato (ex: "8.13 A14") no nome
+  // quando baixa bestvideo+bestaudio em streams separados antes de mesclar
+  const outputTemplate = filePath.replace(/\.[^.]+$/, ".%(ext)s");
+
   const args = [
     ytdlp,
     sourceUrl,
     "-o",
-    filePath,
+    outputTemplate,
     "--no-playlist",
     "--progress",
     "--newline",
@@ -647,6 +655,7 @@ async function realDownload(
     "bestvideo+bestaudio/best",
     "--merge-output-format",
     "mkv",
+    "--embed-metadata",
     "--force-overwrites",
     "--user-agent",
     DOWNLOAD_UA,

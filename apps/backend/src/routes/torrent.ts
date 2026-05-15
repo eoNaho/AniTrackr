@@ -12,6 +12,7 @@ import {
   qbtGetCategories, mapQBState,
 } from "../services/qbittorrent.ts";
 import { getAllHealth, resetProvider } from "../services/circuit-breaker.ts";
+import { generateSingleEpisodeNfoAsync } from "../services/jellyfin.ts";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 
@@ -59,6 +60,8 @@ export function startTorrentMonitor() {
         db.run(`UPDATE animes SET last_download=datetime('now') WHERE id=?`, [meta.animeId]);
         monitoredHashes.delete(torrent.hash);
         logger.info("torrent-monitor", JSON.stringify({ event: "completed", hash: torrent.hash, jobId: meta.jobId }));
+        // Gera NFO e busca metadados Jikan de forma assíncrona
+        if (filePath) void generateSingleEpisodeNfoAsync(meta.animeId, meta.episode, meta.season, filePath);
       } else if (status === "failed") {
         db.run(
           `UPDATE downloads SET status='failed', error_msg='qBittorrent reportou erro', speed_kbps=0 WHERE id=?`,

@@ -11,7 +11,8 @@ import { torrentRoutes, startTorrentMonitor, restoreTorrentMonitors } from "./ro
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
 import { runBackupIfDue } from "./services/backup.ts";
-import { startAutoScheduler } from "./services/auto-schedule.ts";
+import { startAutoScheduler, getAutoScheduleStatus, triggerAutoScheduleNow } from "./services/auto-schedule.ts";
+import db from "./db/index.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3001");
 
@@ -25,7 +26,7 @@ const app = new Elysia()
 
   .get("/health", () => ({
     status: "ok",
-    service: "goanime-tracker",
+    service: "anitrackr",
     version: "2.0.1",
     timestamp: new Date().toISOString(),
     uptime: Math.round(process.uptime()),
@@ -44,6 +45,37 @@ const app = new Elysia()
       .use(jellyfinRoutes)
       .use(subtitleRoutes)
       .use(torrentRoutes)
+      // ── Auto-schedule (registrado aqui para garantir que o módulo já foi inicializado) ──
+      .get("/auto-schedule/status", () => getAutoScheduleStatus())
+      .post("/auto-schedule/run", async () => {
+        await triggerAutoScheduleNow();
+        return { ok: true, message: "Verificação concluída" };
+      })
+      // ── Histórico de downloads (para dashboard de estatísticas) ──
+      .get("/downloads/history", () => {
+        const byMonth = db.query<{ month: string; count: number; total_bytes: number }, []>(`
+          SELECT strftime('%Y-%m', completed_at) as month,
+                 COUNT(*) as count,
+                 COALESCE(SUM(total_bytes), 0) as total_bytes
+          FROM downloads
+          WHERE status = 'completed' AND completed_at IS NOT NULL
+          GROUP BY month ORDER BY month DESC LIMIT 12
+        `).all();
+        const byProvider = db.query<{ provider: string; completed: number; failed: number }, []>(`
+          SELECT provider,
+                 SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
+                 SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed
+          FROM downloads GROUP BY provider ORDER BY completed DESC
+        `).all();
+        const totals = db.query<{ total: number; completed: number; failed: number; total_bytes: number }, []>(`
+          SELECT COUNT(*) as total,
+                 SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
+                 SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed,
+                 COALESCE(SUM(CASE WHEN status='completed' THEN total_bytes ELSE 0 END),0) as total_bytes
+          FROM downloads
+        `).get() ?? { total: 0, completed: 0, failed: 0, total_bytes: 0 };
+        return { byMonth, byProvider, totals };
+      })
   )
 
   .onError(({ code, error, request }) => {
@@ -77,7 +109,7 @@ runBackupIfDue();
 startAutoScheduler();
 
 logger.info("app", `╔══════════════════════════════════════════════════╗`);
-logger.info("app", `║  GoAnime Tracker Backend v2.1.0                  ║`);
+logger.info("app", `║  AniTrackr Backend v2.1.0                  ║`);
 logger.info("app", `║  http://localhost:${PORT}                            ║`);
 logger.info("app", `╚══════════════════════════════════════════════════╝`);
 logger.info("app", `DB FILE: ${DB_FILE}`);

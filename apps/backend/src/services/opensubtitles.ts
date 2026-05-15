@@ -12,7 +12,7 @@ import { dirname, join } from "path";
 import { logger } from "../utils/logger.ts";
 
 const BASE = "https://api.opensubtitles.com/api/v1";
-const APP_NAME = "goanime-tracker";
+const APP_NAME = "anitrackr";
 const APP_VERSION = "2.0.1";
 
 const API_KEY = process.env.OPENSUBTITLES_API_KEY ?? "";

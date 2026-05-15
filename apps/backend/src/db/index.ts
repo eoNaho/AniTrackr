@@ -3,9 +3,9 @@ import { join } from "path";
 import { mkdirSync } from "fs";
 
 const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
-const dataRoot = process.env.GOANIME_DATA_DIR?.trim() || home;
-const defaultDownloadPath = process.env.GOANIME_DOWNLOAD_PATH?.trim() || join(home, "Anime");
-const dbDir = join(dataRoot, ".goanime");
+const dataRoot = process.env.ANITRACKR_DATA_DIR?.trim() || home;
+const defaultDownloadPath = process.env.ANITRACKR_DOWNLOAD_PATH?.trim() || join(home, "Anime");
+const dbDir = join(dataRoot, ".anitrackr");
 const dbFile = join(dbDir, "tracker.db");
 mkdirSync(dbDir, { recursive: true });
 
