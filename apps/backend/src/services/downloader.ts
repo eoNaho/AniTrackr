@@ -245,6 +245,10 @@ function getConfigInt(key: string, fallback: number, min = 0, max = Number.MAX_S
   return Math.min(max, Math.max(min, raw));
 }
 
+function getMaxConcurrentDownloads(): number {
+  return getConfigInt("max_concurrent", 3, 1, 10);
+}
+
 function isSimulationAllowed(): boolean {
   return getConfigBool("allow_simulated_downloads", false);
 }
@@ -258,6 +262,55 @@ function clearTimerMap(map: Map<string, ReturnType<typeof setTimeout>>, jobId: s
   if (!timer) return;
   clearTimeout(timer);
   map.delete(jobId);
+}
+
+function buildYtDlpFormatSelector(quality: string): string {
+  const normalized = quality.trim().toLowerCase();
+  const heightMatch = normalized.match(/(\d{3,4})p/);
+  const height = heightMatch ? Number.parseInt(heightMatch[1], 10) : null;
+
+  if (!height || !Number.isFinite(height)) {
+    return "bestvideo+bestaudio/best";
+  }
+
+  return `bestvideo*[height<=${height}]+bestaudio/best*[height<=${height}]/best`;
+}
+
+function inferFragmentConcurrency(sourceUrl: string): number {
+  const lower = sourceUrl.toLowerCase();
+  if (lower.includes(".m3u8")) return 8;
+  if (lower.includes("googlevideo.com")) return 4;
+  return 1;
+}
+
+function kickQueue(delayMs = 100) {
+  if (active.size >= getMaxConcurrentDownloads()) return;
+
+  const available = Math.max(0, getMaxConcurrentDownloads() - active.size);
+  if (available === 0) return;
+
+  const rows = db.query<{
+    id: string;
+    anime_id: string;
+    episode_number: number;
+    season: number;
+    source_url: string | null;
+  }, [number]>(
+    `SELECT id, anime_id, episode_number, season, source_url
+     FROM downloads
+     WHERE status = 'queued'
+     ORDER BY rowid ASC
+     LIMIT ?`
+  ).all(available * 3);
+
+  let scheduled = 0;
+  for (const row of rows) {
+    if (scheduled >= available) break;
+    if (active.has(row.id) || scheduledStarts.has(row.id) || retryTimers.has(row.id)) continue;
+
+    scheduleStart(row.id, row.anime_id, row.episode_number, row.season, row.source_url, delayMs + scheduled * 75);
+    scheduled += 1;
+  }
 }
 
 function updateAnimeDownloadState(animeId: string) {
@@ -453,6 +506,7 @@ function finalizeFailure(jobId: string, animeId: string, episode: number, season
   );
   updateAnimeDownloadState(animeId);
   logger.warn("downloader", JSON.stringify({ event: "failed", jobId, animeId, episode, season, errorCode }));
+  kickQueue(150);
 }
 
 function scheduleAutoRetry(jobId: string, reason: string, errorCode: string): boolean {
@@ -516,7 +570,10 @@ function handleJobFailure(jobId: string, animeId: string, episode: number, seaso
   const scheduled = scheduleAutoRetry(jobId, reason, errorCode);
   if (!scheduled) {
     finalizeFailure(jobId, animeId, episode, season, reason, errorCode);
+    return;
   }
+
+  kickQueue(100);
 }
 
 function completeJob(jobId: string, animeId: string, episode: number, season: number, filePath: string, totalBytes: number) {
@@ -549,6 +606,7 @@ function completeJob(jobId: string, animeId: string, episode: number, season: nu
 
   // Gera NFO Jellyfin e busca metadados Jikan de forma assíncrona (não bloqueia)
   void generateSingleEpisodeNfoAsync(animeId, episode, season, filePath);
+  kickQueue(100);
 }
 
 function simulateDownload(jobId: string, animeId: string, episode: number, season: number) {
@@ -633,6 +691,9 @@ async function realDownload(
   const ffmpegPath = getConfig("ffmpeg_path");
   const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
+  const quality = getConfig("quality") || "1080p";
+  const formatSelector = buildYtDlpFormatSelector(quality);
+  const fragmentConcurrency = inferFragmentConcurrency(sourceUrl);
 
   const anime = db.query<{
     title: string;
@@ -669,7 +730,7 @@ async function realDownload(
     "--progress",
     "--newline",
     "-f",
-    "bestvideo+bestaudio/best",
+    formatSelector,
     "--merge-output-format",
     "mkv",
     "--embed-metadata",
@@ -680,6 +741,15 @@ async function realDownload(
 
   if (ffmpegPath) {
     args.push("--ffmpeg-location", ffmpegPath);
+  }
+
+  if (fragmentConcurrency > 1) {
+    args.push("-N", String(fragmentConcurrency));
+  }
+
+  if (sourceUrl.toLowerCase().includes(".m3u8")) {
+    args.push("--downloader", "ffmpeg");
+    args.push("--hls-use-mpegts");
   }
 
   if (referer) {
@@ -893,6 +963,11 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
     return;
   }
 
+  if (current.status === "queued" && active.size >= getMaxConcurrentDownloads()) {
+    scheduleStart(jobId, animeId, episode, season, sourceUrl, 500);
+    return;
+  }
+
   // Resolve series_title antes de construir o caminho — garante pasta correta da série
   await ensureSeriesTitle(animeId);
 
@@ -1087,7 +1162,6 @@ function inferEpisodeFromSourceUrl(sourceUrl?: string | null): number | null {
 }
 
 export function enqueueDownloads(animeId: string, episodes: number[], season = 1, sourceUrl?: string): QueueJob[] {
-  const maxConcurrent = getConfigInt("max_concurrent", 3, 1, 10);
   const quality = getConfig("quality") || "1080p";
   const provider = getConfig("provider") || "animefire";
   const maxAttempts = getConfigInt("retry_max_attempts", 3, 0, 20);
@@ -1158,14 +1232,14 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
     insEp.run(randomUUID(), animeId, effectiveEpisode, season);
 
     const startIndex = createdJobIds.length;
-    const delay = Math.floor(startIndex / maxConcurrent) * 1000 + (startIndex % maxConcurrent) * 300;
-    scheduleStart(id, animeId, effectiveEpisode, season, sourceUrl ?? null, delay);
+    scheduleStart(id, animeId, effectiveEpisode, season, sourceUrl ?? null, 50 + startIndex * 75);
 
     createdJobIds.push(id);
   }
 
   if (createdJobIds.length > 0) {
     updateAnimeDownloadState(animeId);
+    kickQueue(25);
   }
 
   logger.info(
@@ -1272,6 +1346,7 @@ export function cancelDownload(jobId: string): boolean {
 
   updateAnimeDownloadState(row.anime_id);
   logger.info("downloader", JSON.stringify({ event: "cancelled", jobId, animeId: row.anime_id, episode: row.episode_number }));
+  kickQueue(100);
   return result.changes > 0;
 }
 
@@ -1318,6 +1393,7 @@ export function retryDownload(jobId: string): boolean {
 
   updateAnimeDownloadState(job.anime_id);
   scheduleStart(jobId, job.anime_id, job.episode_number, job.season, job.source_url, 250);
+  kickQueue(50);
 
   logger.info("downloader", JSON.stringify({ event: "retry_manual", jobId, animeId: job.anime_id, episode: job.episode_number }));
   return true;

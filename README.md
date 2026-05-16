@@ -123,7 +123,7 @@ Exemplo:
 
 ```txt
 apps/
-  backend/   # API Elysia + serviços + SQLite
+  backend/   # API Elysia + serviï¿½os + SQLite
   web/       # UI Next.js
 image/       # screenshots usadas neste README
 ```
