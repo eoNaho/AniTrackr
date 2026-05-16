@@ -38,7 +38,7 @@ type AnimeRow = {
   downloaded_count: number; download_status: string; quality: string;
   provider: string; size_gb: number; local_path: string; year: number | null;
   season_number: number; next_release: string | null; last_download: string | null;
-  ascii_art: string; source_url: string | null; cached_at: string; updated_at: string;
+  ascii_art: string; source_url: string | null; watch_status: string | null; cached_at: string; updated_at: string;
 };
 
 function safeJson<T>(s: string | null, fb: T): T {
@@ -81,6 +81,7 @@ function parseAnime(r: AnimeRow) {
     lastDownload: r.last_download,
     asciiArt: r.ascii_art,
     sourceUrl: r.source_url,
+    watchStatus: r.watch_status ?? "none",
     missingEpisodes: missing,
     progress: r.episode_count > 0 ? Math.round((r.downloaded_count / r.episode_count) * 100) : 0,
     nextEpisodeToDownload: missing > 0 ? "Episode " + (r.downloaded_count + 1) : "Complete",

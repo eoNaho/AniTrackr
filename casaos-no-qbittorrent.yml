@@ -1,0 +1,75 @@
+name: anitrackr
+
+services:
+  backend:
+    image: ghcr.io/eonaho/anitrackr-backend:latest
+    container_name: anitrackr-backend
+    restart: unless-stopped
+    environment:
+      ANITRACKR_RUNTIME: docker
+      PORT: "3001"
+      ANITRACKR_DATA_DIR: /data
+      ANITRACKR_DOWNLOAD_PATH: /downloads
+      ANITRACKR_QBITTORRENT_ENABLED: "false"
+      ANITRACKR_QBITTORRENT_HOST: http://localhost:8080
+      ANITRACKR_QBITTORRENT_SAVE_PATH: /downloads
+    volumes:
+      - type: bind
+        source: ${APP_DATA_DIR:-./casaos-appdata}/backend-data
+        target: /data
+      - type: bind
+        source: ${APP_DATA_DIR:-./casaos-appdata}/downloads
+        target: /downloads
+    ports:
+      - "3001:3001"
+    networks:
+      - anitrackr-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  web:
+    image: ghcr.io/eonaho/anitrackr-web:latest
+    container_name: anitrackr-web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: ""
+      BACKEND_INTERNAL_URL: http://backend:3001
+    networks:
+      - anitrackr-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+networks:
+  anitrackr-net:
+    driver: bridge
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: web
+  author: eoNaho
+  category: Media
+  hostname: ""
+  icon: https://raw.githubusercontent.com/eoNaho/AniTrackr/refs/heads/master/image/icon.png
+  index: /
+  port_map: "3000"
+  scheme: http
+  title:
+    custom: AniTrackr
+  tagline:
+    custom: Busca, downloads e tracking de anime
+  description:
+    custom: Frontend Next.js + backend Bun/Elysia com yt-dlp e ffmpeg para uso local no CasaOS, sem o servico interno de qBittorrent.
+  tips:
+    custom: |
+      Acesse a UI principal em http://SEU_HOST:3000.
+      Esta variante nao sobe o qBittorrent no CasaOS.
+      Se quiser torrents depois, use o arquivo casaos.yml ou configure um qBittorrent externo manualmente.

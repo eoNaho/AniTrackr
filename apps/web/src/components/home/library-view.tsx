@@ -82,7 +82,7 @@ export function LibraryView({
 
   const filteredAnimes = useMemo(() => {
     const q = filter.toLowerCase();
-    let list = q
+    const list = q
       ? animes.filter((a) =>
           a.title.toLowerCase().includes(q) ||
           (a.altTitle ?? "").toLowerCase().includes(q)
@@ -111,10 +111,10 @@ export function LibraryView({
   async function handleGenerateSelectedNfo() {
     if (!selected) return;
     setIsRunningNfo(true);
-    setNfoStatus(`gerando NFO de "${selected.title}"...`);
+    setNfoStatus(`gerando NFO de ${selected.title}...`);
     try {
       const res = await generateJellyfinNfo(selected.id, true);
-      const suffix = res.errors.length > 0 ? ` · ${res.errors.length} aviso(s)` : "";
+      const suffix = res.errors.length > 0 ? ` · ${res.errors.length} warning(s)` : "";
       setNfoStatus(`ok: ${res.episodesNfo} episode.nfo + tvshow.nfo${suffix}`);
     } catch (err) {
       setNfoStatus(`erro: ${(err as Error).message}`);
@@ -128,7 +128,7 @@ export function LibraryView({
     setNfoStatus("gerando NFO da biblioteca...");
     try {
       const res = await generateAllJellyfinNfo(false);
-      setNfoStatus(`ok: ${res.done}/${res.total} animes processados · ${res.episodesNfoTotal} episode.nfo`);
+      setNfoStatus(`ok: ${res.done}/${res.total} titles processed · ${res.episodesNfoTotal} episode.nfo`);
     } catch (err) {
       setNfoStatus(`erro: ${(err as Error).message}`);
     } finally {
@@ -139,11 +139,11 @@ export function LibraryView({
   async function handleEnrichSelectedJikan() {
     if (!selected) return;
     setIsRunningMeta(true);
-    setMetaStatus(`Jikan enrich: "${selected.title}"...`);
+      setMetaStatus(`Jikan enrich: ${selected.title}...`);
     try {
       const res = await enrichAnimeJikan(selected.id);
       const total = typeof res.total === "number" ? res.total : res.enriched;
-      setMetaStatus(`Jikan ok: ${res.enriched}/${total} episodios${res.message ? ` · ${res.message}` : ""}`);
+      setMetaStatus(`Jikan ok: ${res.enriched}/${total} episodes${res.message ? ` · ${res.message}` : ""}`);
       onRefresh();
     } catch (err) {
       setMetaStatus(`Jikan erro: ${(err as Error).message}`);
@@ -155,7 +155,7 @@ export function LibraryView({
   async function handleEnrichSelectedAniList() {
     if (!selected) return;
     setIsRunningMeta(true);
-    setMetaStatus(`AniList enrich: "${selected.title}"...`);
+      setMetaStatus(`AniList enrich: ${selected.title}...`);
     try {
       const res = await enrichAnimeAnilist(selected.id);
       if (!res.ok) throw new Error(res.error ?? "falha ao enriquecer");
@@ -222,7 +222,7 @@ export function LibraryView({
               Biblioteca vazia. Use a aba <span className="text-[#cba6f7]">[SEARCH]</span> para adicionar animes.
             </div>
           ) : filteredAnimes.length === 0 ? (
-            <div className="px-4 py-4 text-[12px] text-[#6c7086]">Nenhum resultado para "{filter}"</div>
+            <div className="px-4 py-4 text-[12px] text-[#6c7086]">Nenhum anime encontrado para o filtro atual.</div>
           ) : (
             filteredAnimes.map((anime) => {
               const realIdx = animes.findIndex((a) => a.id === anime.id);

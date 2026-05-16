@@ -116,7 +116,12 @@ function StatsPanel() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [load]);
 
   async function handleRunNow() {
     setRunning(true);
@@ -261,7 +266,12 @@ function ProviderHealthPanel() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [load]);
 
   const KNOWN_PROVIDERS = ["animefire", "goyabu", "allanime", "nineanime", "animedrive", "superflix", "dattebayo"];
 
@@ -354,7 +364,7 @@ const DEFAULTS: ConfigState = {
   max_concurrent: "3",
   naming_scheme: "jellyfin",
   prefer_sub: "true",
-  allow_simulated_downloads: "true",
+  allow_simulated_downloads: "false",
   yt_dlp_path: "yt-dlp",
   ffmpeg_path: "ffmpeg",
   auto_retry_enabled: "true",
@@ -387,12 +397,16 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
   }, []);
 
   useEffect(() => {
-    setLoading(true);
-    setLoadError(null);
-    fetchConfig()
-      .then((data) => setCfg({ ...DEFAULTS, ...data }))
-      .catch((e) => setLoadError((e as Error).message))
-      .finally(() => setLoading(false));
+    const timer = setTimeout(() => {
+      setLoading(true);
+      setLoadError(null);
+      fetchConfig()
+        .then((data) => setCfg({ ...DEFAULTS, ...data }))
+        .catch((e) => setLoadError((e as Error).message))
+        .finally(() => setLoading(false));
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, []);
 
   function set(key: string, value: string) {
@@ -487,7 +501,7 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
                   className={inputCls}
                   value={cfg.download_path}
                   onChange={(e) => set("download_path", e.target.value)}
-                  placeholder="C:\Usuarios\...\Anime"
+                  placeholder="/downloads ou /mnt/media/anime"
                 />
               </Field>
               <Field label="qualidade padrão">
@@ -600,7 +614,7 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
                   className={inputCls}
                   value={cfg.qbittorrent_host}
                   onChange={(e) => set("qbittorrent_host", e.target.value)}
-                  placeholder="http://localhost:8080"
+                  placeholder="http://qbittorrent:8080 (Docker) ou http://localhost:8080"
                   disabled={!isQbtEnabled}
                 />
               </Field>

@@ -88,6 +88,7 @@ export type LibraryAnime = {
   year: number | null;
   rating: number | null;
   kitsuId: string | null;
+  watchStatus: WatchStatus;
 };
 
 export type LibrarySummary = {
@@ -426,7 +427,19 @@ export async function searchNyaa(params: { q: string; category?: string; group?:
   if (params.resolution) p.set("resolution", params.resolution);
   if (params.limit) p.set("limit", String(params.limit));
   return requestJson<{
-    results: { id: string; title: string; magnetLink: string; torrentUrl: string; size: string; seeders: number; leechers: number; group: string; resolution: string; infoHash: string }[];
+    results: {
+      id: string;
+      title: string;
+      magnetLink: string;
+      torrentUrl: string;
+      size: string;
+      seeders: number;
+      leechers: number;
+      group: string;
+      resolution: string;
+      infoHash: string;
+      releaseType: "raw" | "subbed" | "dubbed" | "unknown";
+    }[];
     total: number;
     query: string;
   }>(`/api/nyaa/search?${p.toString()}`);
@@ -605,6 +618,14 @@ export type DiagnosticsReport = {
   }>;
   qbittorrent: { enabled: boolean; connected: boolean; version: string | null };
   downloadPath: { path: string; accessible: boolean };
+  runtime: {
+    simulationEnabled: boolean;
+    ytDlpPath: string;
+    ytDlpAvailable: boolean;
+    ffmpegPath: string;
+    ffmpegAvailable: boolean;
+    realDownloadsReady: boolean;
+  };
   summary: { providersDown: number; recentFailures: number; hasIssues: boolean };
 };
 
@@ -667,6 +688,15 @@ export type AnimeRule = {
   queue_priority?: number;
 };
 
+export type AnimeRuleInput = {
+  preferredProvider?: string | null;
+  preferredQuality?: string | null;
+  preferredDownloadType?: string | null;
+  preferredLanguage?: string | null;
+  autoDownload?: number;
+  queuePriority?: number;
+};
+
 export type FranchiseEntry = {
   id: string; title: string; season_number: number;
   poster_url: string | null; episode_count: number;
@@ -696,6 +726,35 @@ export type Recommendation = {
   titleRomaji: string;
   relationType: string;
   format: string;
+};
+
+export type DiscoverRandomPick = {
+  anilistId: number;
+  malId: number | null;
+  title: string;
+  titleRomaji: string;
+  titleEnglish: string | null;
+  titleNative: string | null;
+  synopsis: string | null;
+  posterUrl: string | null;
+  bannerUrl: string | null;
+  rating: number | null;
+  meanScore: number | null;
+  status: string;
+  episodeCount: number | null;
+  episodeLength: number | null;
+  format: string;
+  season: string | null;
+  year: number | null;
+  startDate: { year: number | null; month: number | null; day: number | null };
+  genres: string[];
+  tags: string[];
+  studios: string[];
+  nextAiringEpisode: { episode: number; airingAt: number } | null;
+  popularity: number;
+  trailer: { id: string; site: string } | null;
+  isAdult: boolean;
+  relations: Array<{ type: string; id: number; title: string; format: string }>;
 };
 
 export type DownloadHistoryInsights = {
@@ -730,7 +789,7 @@ export const fetchDownloadHistoryInsights = () =>
 export const fetchAnimeRules = (animeId: string) =>
   requestJson<AnimeRule>(`/api/library/${animeId}/rules`);
 
-export const saveAnimeRules = (animeId: string, rules: Omit<AnimeRule, "anime_id">) =>
+export const saveAnimeRules = (animeId: string, rules: AnimeRuleInput) =>
   requestJsonWithBodyError<{ ok: boolean }>(`${getBackendUrl()}/api/library/${animeId}/rules`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -772,6 +831,15 @@ export const fetchRecommendations = (basedOn: string) =>
   requestJson<{ basedOn: string; basedOnTitle: string; recommendations: Recommendation[] }>(
     `/api/discover?basedOn=${encodeURIComponent(basedOn)}`
   );
+
+export const fetchRandomDiscover = (mode = "mixed", limit = 6) =>
+  requestJson<{
+    mode: string;
+    genre: string;
+    page: number;
+    total: number;
+    picks: DiscoverRandomPick[];
+  }>(`/api/discover/random?mode=${encodeURIComponent(mode)}&limit=${limit}`);
 
 export const updateWatchStatus = (animeId: string, watchStatus: WatchStatus) =>
   requestJsonWithBodyError<{ ok: boolean }>(`${getBackendUrl()}/api/library/${animeId}`, {

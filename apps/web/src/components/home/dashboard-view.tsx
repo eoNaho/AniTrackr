@@ -93,6 +93,7 @@ function AnimeRow({
             className="flex-shrink-0 w-28 text-left group"
           >
             {anime.poster_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={anime.poster_url}
                 alt={anime.title}

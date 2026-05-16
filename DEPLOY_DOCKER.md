@@ -1,6 +1,6 @@
 # Deploy com Docker (Linux)
 
-Este projeto agora roda com `web` + `backend` via `docker compose`.
+Este projeto agora roda com `web` + `backend` + `qbittorrent` via `docker compose`.
 
 ## 1) Pré-requisitos
 
@@ -28,6 +28,7 @@ docker compose logs -f --tail=150
 
 - Web: `http://SEU_SERVIDOR:3000`
 - Backend health: `http://SEU_SERVIDOR:3001/health`
+- qBittorrent WebUI: `http://SEU_SERVIDOR:8080`
 
 ## 4) Persistência
 
@@ -35,6 +36,7 @@ Volumes nomeados:
 
 - `anitrackr_data` -> dados do SQLite (`/data/.anitrackr/tracker.db`)
 - `anitrackr_downloads` -> arquivos baixados (`/downloads`)
+- `anitrackr_qbt_config` -> configuracao do qBittorrent
 
 ## 5) Configuração de download no app
 
@@ -103,3 +105,12 @@ ANITRACKR_IMAGE_OWNER=SEU_USUARIO ANITRACKR_IMAGE_REPO=SEU_REPO docker compose -
 ```
 
 > Nota: referencias de imagem Docker/GHCR devem ficar em minusculo (`owner/repo`).
+
+## qBittorrent no Docker
+
+Para o fluxo de torrent na stack Docker:
+
+- o backend usa `http://qbittorrent:8080` internamente;
+- a WebUI fica exposta no host em `http://SEU_SERVIDOR:8080`;
+- o volume `anitrackr_qbt_config` persiste a configuracao do cliente;
+- em imagens recentes do qBittorrent, confira `docker compose logs qbittorrent` para ver a senha inicial temporaria do WebUI.

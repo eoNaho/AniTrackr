@@ -1,0 +1,100 @@
+name: anitrackr
+
+services:
+  backend:
+    image: ghcr.io/eonaho/anitrackr-backend:latest
+    container_name: anitrackr-backend
+    restart: unless-stopped
+    environment:
+      ANITRACKR_RUNTIME: docker
+      PORT: "3001"
+      ANITRACKR_DATA_DIR: /data
+      ANITRACKR_DOWNLOAD_PATH: /downloads
+      ANITRACKR_QBITTORRENT_HOST: http://qbittorrent:8080
+      ANITRACKR_QBITTORRENT_SAVE_PATH: /downloads
+    volumes:
+      - type: bind
+        source: ${APP_DATA_DIR:-./casaos-appdata}/backend-data
+        target: /data
+      - type: bind
+        source: ${APP_DATA_DIR:-./casaos-appdata}/downloads
+        target: /downloads
+    ports:
+      - "3001:3001"
+    networks:
+      - anitrackr-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      - qbittorrent
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: anitrackr-qbittorrent
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+      WEBUI_PORT: "8080"
+      TORRENTING_PORT: "6881"
+    volumes:
+      - type: bind
+        source: ${APP_DATA_DIR:-./casaos-appdata}/qbittorrent-config
+        target: /config
+      - type: bind
+        source: ${APP_DATA_DIR:-./casaos-appdata}/downloads
+        target: /downloads
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    networks:
+      - anitrackr-net
+
+  web:
+    image: ghcr.io/eonaho/anitrackr-web:latest
+    container_name: anitrackr-web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: ""
+      BACKEND_INTERNAL_URL: http://backend:3001
+    networks:
+      - anitrackr-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+networks:
+  anitrackr-net:
+    driver: bridge
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: web
+  author: eoNaho
+  category: Media
+  hostname: ""
+  icon: https://raw.githubusercontent.com/eoNaho/AniTrackr/refs/heads/master/image/icon.png
+  index: /
+  port_map: "3000"
+  scheme: http
+  title:
+    custom: AniTrackr
+  tagline:
+    custom: Busca, downloads e tracking de anime
+  description:
+    custom: Frontend Next.js + backend Bun/Elysia com yt-dlp, ffmpeg e qBittorrent integrados para uso local no CasaOS.
+  tips:
+    custom: |
+      Acesse a UI principal em http://SEU_HOST:3000 e o qBittorrent em http://SEU_HOST:8080.
+      No primeiro boot do qBittorrent, a senha do WebUI pode ser temporaria.
+      Se precisar, abra os logs do container do qBittorrent no CasaOS para ver a senha inicial.

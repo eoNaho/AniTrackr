@@ -182,6 +182,55 @@ query ($from: Int, $to: Int, $page: Int, $perPage: Int) {
   }
 }`;
 
+const BROWSE_QUERY = `
+query (
+  $page: Int,
+  $perPage: Int,
+  $sort: [MediaSort],
+  $statusIn: [MediaStatus],
+  $formatIn: [MediaFormat],
+  $genreIn: [String],
+  $season: MediaSeason,
+  $seasonYear: Int
+) {
+  Page(page: $page, perPage: $perPage) {
+    media(
+      type: ANIME,
+      isAdult: false,
+      sort: $sort,
+      status_in: $statusIn,
+      format_in: $formatIn,
+      genre_in: $genreIn,
+      season: $season,
+      seasonYear: $seasonYear
+    ) {
+      id idMal
+      title { romaji english native }
+      description(asHtml: false)
+      genres
+      tags { name category }
+      coverImage { large extraLarge medium }
+      bannerImage
+      averageScore meanScore
+      status episodes duration format
+      season seasonYear
+      startDate { year month day }
+      endDate { year month day }
+      nextAiringEpisode { episode airingAt }
+      popularity favourites
+      studios { nodes { id name isAnimationStudio } }
+      relations {
+        edges {
+          relationType
+          node { id title { romaji english } format }
+        }
+      }
+      trailer { id site }
+      isAdult
+    }
+  }
+}`;
+
 async function gql<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
   try {
     const res = await fetch(ANILIST_URL, {
@@ -249,6 +298,30 @@ export async function getUpcomingAiringSchedule(
     perPage,
   });
   return data?.Page?.airingSchedules ?? [];
+}
+
+export async function browseAniList(options: {
+  page?: number;
+  perPage?: number;
+  sort?: string[];
+  statusIn?: AniListAnime["status"][];
+  formatIn?: string[];
+  genreIn?: string[];
+  season?: string | null;
+  seasonYear?: number | null;
+} = {}): Promise<AniListAnime[]> {
+  const data = await gql<{ Page: { media: AniListAnime[] } }>(BROWSE_QUERY, {
+    page: options.page ?? 1,
+    perPage: options.perPage ?? 12,
+    sort: options.sort ?? ["POPULARITY_DESC"],
+    statusIn: options.statusIn ?? ["RELEASING", "FINISHED"],
+    formatIn: options.formatIn ?? ["TV", "ONA", "MOVIE"],
+    genreIn: options.genreIn?.length ? options.genreIn : undefined,
+    season: options.season ?? undefined,
+    seasonYear: options.seasonYear ?? undefined,
+  });
+
+  return data?.Page?.media ?? [];
 }
 
 /**

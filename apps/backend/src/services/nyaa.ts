@@ -19,6 +19,7 @@ export interface NyaaResult {
   pubDate: string;
   group: string;
   resolution: string;
+  releaseType: "raw" | "subbed" | "dubbed" | "unknown";
 }
 
 const TRACKERS = [
@@ -59,6 +60,17 @@ function extractGroup(title: string): string {
 function extractResolution(title: string): string {
   const m = title.match(/\b(2160p|1080p|720p|480p|360p)\b/i);
   return m ? m[1] : "";
+}
+
+function inferReleaseType(title: string, category: string): NyaaResult["releaseType"] {
+  const normalizedTitle = title.toLowerCase();
+  const normalizedCategory = category.toLowerCase();
+
+  if (normalizedCategory.includes("raw")) return "raw";
+  if (/\b(raw|raws|unsubbed|no subs?|no subtitles?)\b/i.test(normalizedTitle)) return "raw";
+  if (/\b(dub|dubbed|dual audio)\b/i.test(normalizedTitle)) return "dubbed";
+  if (/\b(sub|subs|subbed|softsub|multi-sub|multi subs|english translated)\b/i.test(normalizedTitle)) return "subbed";
+  return "unknown";
 }
 
 function parseItems(rssXml: string): NyaaResult[] {
@@ -102,6 +114,7 @@ function parseItems(rssXml: string): NyaaResult[] {
       pubDate,
       group: extractGroup(title),
       resolution: extractResolution(title),
+      releaseType: inferReleaseType(title, category),
     });
   }
 
@@ -135,9 +148,18 @@ export async function searchNyaa(
   let items = parseItems(xml);
 
   // Ranking: grupo preferido + resolução preferida + seeders
-  if (options.preferredGroup || options.preferredResolution) {
+  if (options.preferredGroup || options.preferredResolution || category === "1_2" || category === "1_4") {
     items = items.sort((a, b) => {
       let sa = 0, sb = 0;
+      if (category === "1_4") {
+        if (a.releaseType === "raw") sa += 90;
+        if (b.releaseType === "raw") sb += 90;
+        if (a.releaseType === "subbed" || a.releaseType === "dubbed") sa -= 90;
+        if (b.releaseType === "subbed" || b.releaseType === "dubbed") sb -= 90;
+      } else if (category === "1_2") {
+        if (a.releaseType === "subbed") sa += 90;
+        if (b.releaseType === "subbed") sb += 90;
+      }
       if (options.preferredGroup) {
         if (a.group.toLowerCase().includes(options.preferredGroup!.toLowerCase())) sa += 100;
         if (b.group.toLowerCase().includes(options.preferredGroup!.toLowerCase())) sb += 100;
@@ -176,5 +198,6 @@ export async function getNyaaById(id: string): Promise<NyaaResult | null> {
     pubDate: "",
     group: "",
     resolution: "",
+    releaseType: "unknown",
   };
 }

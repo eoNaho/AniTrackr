@@ -21,7 +21,6 @@ import {
   queueMissingForAll,
   retryDownloadById,
   retryFailedDownloads,
-  saveConfig,
   scanAnimeById,
   searchAnime,
   searchEpisodes,
@@ -41,6 +40,8 @@ import { DashboardView } from "./dashboard-view";
 import { CalendarView } from "./calendar-view";
 import { DiagnosticsPanel } from "./diagnostics-panel";
 import { IntegrityView } from "./integrity-view";
+import { DiscoverView } from "./discover-view";
+import { SubtitlesView } from "./subtitles-view";
 
 function fmtGb(v: number) {
   return `${v.toFixed(1)} GB`;
@@ -66,14 +67,14 @@ function mapAnime(a: LibraryAnime): AnimeView {
     progress: a.progress,
     year: a.year ?? null,
     rating: a.rating ?? null,
+    watchStatus: a.watchStatus ?? "none",
   };
 }
 
-type Mode = "dashboard" | "library" | "calendar" | "search" | "diagnostics" | "integrity" | "settings";
+type Mode = "dashboard" | "library" | "calendar" | "discover" | "subtitles" | "search" | "diagnostics" | "integrity" | "settings";
 type LogEntry = { time: string; module: string; text: string };
 type StreamState = "connecting" | "live" | "fallback";
 type SearchEpisode = { key: string; number: number; label: string; url: string };
-
 function buildEpisodeKey(episode: { number: number; label: string; url: string }, index: number) {
   return `${episode.number}::${episode.url}::${episode.label}::${index}`;
 }
@@ -199,12 +200,6 @@ function inferEpisodeNumber(episode: { number: number; label: string; url: strin
   return fallback;
 }
 
-function requestNotificationPermission() {
-  if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
-  }
-}
-
 function sendNotification(title: string, body: string) {
   if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
   new Notification(title, { body, icon: "/favicon.ico" });
@@ -228,11 +223,6 @@ export function TrackerHome() {
   const [lastStreamTs, setLastStreamTs] = useState<number | null>(null);
 
   const [downloadPath, setDownloadPath] = useState("");
-  const [quality, setQuality] = useState("1080p");
-  const [maxConcurrent, setMaxConcurrent] = useState("3");
-  const [namingScheme, setNamingScheme] = useState("jellyfin");
-  const [ytDlpPath, setYtDlpPath] = useState("yt-dlp");
-  const [ffmpegPath, setFfmpegPath] = useState("ffmpeg");
   const [allowSimulatedDownloads, setAllowSimulatedDownloads] = useState("false");
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -288,11 +278,6 @@ export function TrackerHome() {
       setDownloadJobs(downloadsRes.jobs);
       setBackendStatus("online");
       setDownloadPath(cfgRes.download_path ?? "");
-      setQuality(cfgRes.quality ?? "1080p");
-      setMaxConcurrent(cfgRes.max_concurrent ?? "3");
-      setNamingScheme(cfgRes.naming_scheme ?? "jellyfin");
-      setYtDlpPath(cfgRes.yt_dlp_path ?? "yt-dlp");
-      setFfmpegPath(cfgRes.ffmpeg_path ?? "ffmpeg");
       setAllowSimulatedDownloads(cfgRes.allow_simulated_downloads ?? "false");
       const statsByStatus = (statsRes as { byStatus?: Record<string, number> }).byStatus;
       pushLog("api", `online v${health.version} | queued: ${String(statsByStatus?.queued ?? 0)}`);
@@ -578,23 +563,6 @@ export function TrackerHome() {
     }
   }
 
-  async function handleSavePath() {
-    try {
-      await saveConfig({
-        download_path: downloadPath,
-        quality,
-        max_concurrent: maxConcurrent,
-        naming_scheme: namingScheme,
-        yt_dlp_path: ytDlpPath,
-        ffmpeg_path: ffmpegPath,
-        allow_simulated_downloads: allowSimulatedDownloads,
-      });
-      pushLog("config", "config de download atualizada");
-    } catch (e) {
-      pushLog("config", `erro: ${(e as Error).message}`);
-    }
-  }
-
   async function handleCancelDownload(id: string) {
     try {
       await cancelDownloadById(id);
@@ -646,7 +614,13 @@ export function TrackerHome() {
   }
 
   async function handleSearch() {
-    if (searchQuery.trim().length < 2) return;
+    return runSearch(searchQuery, searchSource);
+  }
+
+  async function runSearch(rawQuery: string, sourceOverride?: string) {
+    const effectiveQuery = rawQuery.trim();
+    const effectiveSource = sourceOverride ?? searchSource;
+    if (effectiveQuery.length < 2) return;
     setIsBusy(true);
     setSearchResults([]);
     setSearchProviderStats(null);
@@ -655,15 +629,24 @@ export function TrackerHome() {
     setEpisodes([]);
     setSelectedEpisodes([]);
     try {
-      const res = await searchAnime(searchQuery.trim(), searchSource);
+      const res = await searchAnime(effectiveQuery, effectiveSource);
       setSearchResults(res.results ?? []);
       setSearchProviderStats(res.providerStats ?? null);
-      pushLog("search", `"${searchQuery}" -> ${res.results?.length ?? 0} resultados`);
+      pushLog("search", `"${effectiveQuery}" -> ${res.results?.length ?? 0} resultados`);
     } catch (e) {
       pushLog("search", `erro: ${(e as Error).message}`);
     } finally {
       setIsBusy(false);
     }
+  }
+
+  async function handleDiscoverSearch(title: string) {
+    const normalized = title.trim();
+    if (!normalized) return;
+    setSearchQuery(normalized);
+    setSearchSource("all");
+    setMode("search");
+    await runSearch(normalized, "all");
   }
 
   async function handleSelectResult(result: SearchResult) {
@@ -801,6 +784,8 @@ export function TrackerHome() {
   const statusColor = backendStatus === "online" ? "text-[#a6e3a1]" : backendStatus === "offline" ? "text-[#f38ba8]" : "text-[#f9e2af]";
   const streamLabel = streamState === "live" ? "live" : streamState === "fallback" ? "polling" : "connecting";
   const streamLabelClass = streamState === "live" ? "text-[#a6e3a1]" : streamState === "fallback" ? "text-[#f9e2af]" : "text-[#6c7086]";
+  const runtimeModeLabel = allowSimulatedDownloads === "true" ? "sim-on" : "real-only";
+  const runtimeModeClass = allowSimulatedDownloads === "true" ? "text-[#f9e2af]" : "text-[#a6e3a1]";
 
   return (
     <div
@@ -820,17 +805,19 @@ export function TrackerHome() {
       `}</style>
 
       <div className="flex h-full flex-col gap-[10px] rounded-md border border-[#45475a] bg-[#0f0f14] p-[10px] shadow-[0_20px_50px_rgba(0,0,0,.8),inset_0_0_100px_rgba(0,0,0,.5)]">
-        <header className="flex flex-col gap-2 text-[14px] md:flex-row md:items-center md:justify-between">
+        <header className="flex shrink-0 flex-col gap-3 border-b border-[#2a2a38] pb-3 text-[14px]">
           <div className="font-extrabold tracking-[1px] text-[#cba6f7] drop-shadow-[0_0_4px_rgba(203,166,247,.35)]">
             ANITRACKR-DOWNLOAD-TRACKER v2.0.1<span className="blink ml-1">_</span>
           </div>
 
-          <nav className="flex flex-wrap gap-1">
+          <nav className="order-3 flex flex-wrap gap-1">
             {(
               [
                 ["dashboard", "início"],
                 ["library", "biblioteca"],
                 ["calendar", "calendário"],
+                ["discover", "discover"],
+                ["subtitles", "subtitles"],
                 ["search", "busca"],
                 ["diagnostics", "diagnóstico"],
                 ["integrity", "integridade"],
@@ -840,7 +827,7 @@ export function TrackerHome() {
               <button
                 key={m}
                 onClick={() => setMode(m)}
-                className={`border px-3 py-1 text-[12px] font-bold uppercase ${
+                className={`border px-3 py-[7px] text-[11px] font-bold uppercase tracking-[0.12em] ${
                   mode === m
                     ? "border-[#cba6f7] bg-[#cba6f7] text-[#0f0f14]"
                     : "border-[#45475a] text-[#6c7086] hover:border-[#cba6f7] hover:text-[#cba6f7]"
@@ -851,21 +838,24 @@ export function TrackerHome() {
             ))}
           </nav>
 
-          <div className="flex flex-wrap items-center gap-3 text-[12px] text-[#6c7086]">
+          <div className="order-2 flex flex-wrap items-center gap-2 rounded-sm border border-[#2a2a38] bg-[#0b0b11] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-[#6c7086]">
             {providerBadges.map((p) => (
-              <span key={p} className="uppercase">[{p}]</span>
+              <span key={p} className="border border-[#232332] px-[6px] py-[2px] uppercase">[{p}]</span>
             ))}
-            <span>
+            <span className="mr-2">
               API: <span className={`font-bold ${statusColor}`}>{backendStatus}</span>
               {backendHealth ? ` v${backendHealth.version}` : ""}
             </span>
-            <span>
+            <span className="mr-2">
               DL: <span className={`font-bold uppercase ${streamLabelClass}`}>{streamLabel}</span>
+            </span>
+            <span>
+              Mode: <span className={`font-bold uppercase ${runtimeModeClass}`}>{runtimeModeLabel}</span>
             </span>
           </div>
         </header>
 
-        <div className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-[#45475a] pb-2 text-[11px] text-[#6c7086]">
+        <div className="flex shrink-0 items-center gap-2 overflow-hidden pb-2 text-[11px] text-[#6c7086]">
           {logs.slice(-2).map((log, i) => (
             <span key={`${log.time}-${log.module}-${i}`} className="truncate boot">
               <span className="text-[#89dceb]">{log.time}</span>{" "}
@@ -891,6 +881,14 @@ export function TrackerHome() {
             />
           )}
           {mode === "calendar" && <CalendarView />}
+          {mode === "discover" && (
+            <DiscoverView
+              selectedAnime={selected}
+              onRefreshLibrary={refreshData}
+              onOpenSearch={handleDiscoverSearch}
+            />
+          )}
+          {mode === "subtitles" && <SubtitlesView selectedAnime={selected} />}
           {mode === "diagnostics" && <DiagnosticsPanel />}
           {mode === "integrity" && <IntegrityView />}
           {mode === "library" && (
@@ -973,7 +971,7 @@ export function TrackerHome() {
         message={
           deleteDialogTarget ? (
             <>
-              Remover <span className="font-bold text-[#e0e0ed]">"{deleteDialogTarget.title}"</span> da biblioteca?
+              Remover <span className="font-bold text-[#e0e0ed]">{deleteDialogTarget.title}</span> da biblioteca?
               <br />
               <br />
               Isso remove apenas o registro do banco. Arquivos locais nao sao apagados.

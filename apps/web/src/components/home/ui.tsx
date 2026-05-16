@@ -24,6 +24,7 @@ export type AnimeView = {
   progress: number;
   year: number | null;
   rating: number | null;
+  watchStatus?: string | null;
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -125,6 +126,150 @@ export function StatBox({
       </div>
     </div>
   );
+}
+
+export function TuiSection({
+  title,
+  subtitle,
+  children,
+  className = "",
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`border border-[#45475a] bg-black/20 ${className}`}>
+      <div className="border-b border-dashed border-[#45475a] px-4 py-3">
+        <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#cba6f7]">{title}</div>
+        {subtitle ? <p className="mt-1 text-[12px] text-[#6c7086]">{subtitle}</p> : null}
+      </div>
+      <div className="min-h-0">{children}</div>
+    </section>
+  );
+}
+
+export function TuiInfoBox({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: "default" | "success" | "warning" | "danger" | "info";
+}) {
+  const toneClass =
+    tone === "success"
+      ? "text-[#a6e3a1]"
+      : tone === "warning"
+      ? "text-[#f9e2af]"
+      : tone === "danger"
+      ? "text-[#f38ba8]"
+      : tone === "info"
+      ? "text-[#89dceb]"
+      : "text-[#e0e0ed]";
+
+  return (
+    <div className="border border-[#45475a] bg-[#11111a] p-3">
+      <div className="text-[11px] uppercase tracking-[0.18em] text-[#6c7086]">{label}</div>
+      <div className={`mt-1 text-[22px] font-extrabold ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+export function TuiButton({
+  children,
+  onClick,
+  disabled,
+  variant = "default",
+  className = "",
+  type = "button",
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  variant?: "default" | "primary" | "success" | "danger" | "info";
+  className?: string;
+  type?: "button" | "submit" | "reset";
+}) {
+  const variantClass =
+    variant === "primary"
+      ? "border-[#cba6f7] text-[#cba6f7] hover:bg-[#cba6f7] hover:text-[#0f0f14]"
+      : variant === "success"
+      ? "border-[#a6e3a1] text-[#a6e3a1] hover:bg-[#a6e3a1] hover:text-[#0f0f14]"
+      : variant === "danger"
+      ? "border-[#f38ba8] text-[#f38ba8] hover:bg-[#f38ba8] hover:text-[#0f0f14]"
+      : variant === "info"
+      ? "border-[#89dceb] text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
+      : "border-[#45475a] text-[#bac2de] hover:border-[#cba6f7] hover:text-[#cba6f7]";
+
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`border bg-transparent px-3 py-2 text-[11px] font-bold uppercase tracking-[0.14em] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${variantClass} ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function TuiInput({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  className = "",
+}: {
+  value: string | number;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: "text" | "number";
+  className?: string;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className={`border border-[#45475a] bg-[#0f0f14] px-3 py-2 text-[12px] text-[#e0e0ed] outline-none transition-colors placeholder:text-[#6c7086] focus:border-[#cba6f7] ${className}`}
+    />
+  );
+}
+
+export function TuiSelect({
+  value,
+  onChange,
+  children,
+  className = "",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className={`border border-[#45475a] bg-[#0f0f14] px-3 py-2 text-[12px] text-[#e0e0ed] outline-none transition-colors focus:border-[#cba6f7] ${className}`}
+    >
+      {children}
+    </select>
+  );
+}
+
+export function TuiEmpty({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return <div className={`border border-dashed border-[#45475a] bg-black/10 px-4 py-5 text-[12px] text-[#6c7086] ${className}`}>{children}</div>;
 }
 
 // ── AnimeRow ──────────────────────────────────────────────────────────────────

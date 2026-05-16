@@ -8,6 +8,21 @@ function getConfig(key: string): string {
   return db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key)?.value ?? "";
 }
 
+function isCommandAvailable(command: string): boolean {
+  const value = command.trim();
+  if (!value) return false;
+
+  if (value.includes("/") || value.includes("\\")) {
+    return existsSync(value);
+  }
+
+  try {
+    return Bun.which(value) != null;
+  } catch {
+    return false;
+  }
+}
+
 export const diagnosticsRoutes = new Elysia({ prefix: "/diagnostics" })
   .get("/", async () => {
     const providers = getAllHealth();
@@ -32,6 +47,12 @@ export const diagnosticsRoutes = new Elysia({ prefix: "/diagnostics" })
 
     const downloadPath = getConfig("download_path");
     const downloadPathValid = downloadPath ? existsSync(downloadPath) : false;
+    const ytDlpPath = getConfig("yt_dlp_path") || "yt-dlp";
+    const ffmpegPath = getConfig("ffmpeg_path") || "ffmpeg";
+    const simulationEnabled = getConfig("allow_simulated_downloads") === "true";
+    const ytDlpAvailable = isCommandAvailable(ytDlpPath);
+    const ffmpegAvailable = isCommandAvailable(ffmpegPath);
+    const realDownloadsReady = downloadPathValid && ytDlpAvailable && ffmpegAvailable;
 
     return {
       providers: { all: providers, open: openProviders },
@@ -42,10 +63,23 @@ export const diagnosticsRoutes = new Elysia({ prefix: "/diagnostics" })
         version: qbtStatus?.version ?? null,
       },
       downloadPath: { path: downloadPath, accessible: downloadPathValid },
+      runtime: {
+        simulationEnabled,
+        ytDlpPath,
+        ytDlpAvailable,
+        ffmpegPath,
+        ffmpegAvailable,
+        realDownloadsReady,
+      },
       summary: {
         providersDown: openProviders.length,
         recentFailures: recentFailures.length,
-        hasIssues: openProviders.length > 0 || !downloadPathValid || (qbtEnabled && qbtStatus?.ok !== true),
+        hasIssues:
+          openProviders.length > 0 ||
+          !downloadPathValid ||
+          !ytDlpAvailable ||
+          !ffmpegAvailable ||
+          (qbtEnabled && qbtStatus?.ok !== true),
       },
     };
   });

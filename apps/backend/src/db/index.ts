@@ -1,10 +1,15 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 
 const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
+const isDockerRuntime = process.env.ANITRACKR_RUNTIME?.trim() === "docker" || existsSync("/.dockerenv");
 const dataRoot = process.env.ANITRACKR_DATA_DIR?.trim() || home;
 const defaultDownloadPath = process.env.ANITRACKR_DOWNLOAD_PATH?.trim() || join(home, "Anime");
+const defaultQbHost = process.env.ANITRACKR_QBITTORRENT_HOST?.trim()
+  || (isDockerRuntime ? "http://qbittorrent:8080" : "http://localhost:8080");
+const defaultQbEnabled = process.env.ANITRACKR_QBITTORRENT_ENABLED?.trim() || "false";
+const defaultQbSavePath = process.env.ANITRACKR_QBITTORRENT_SAVE_PATH?.trim() || "";
 const dbDir = join(dataRoot, ".anitrackr");
 const dbFile = join(dbDir, "tracker.db");
 mkdirSync(dbDir, { recursive: true });
@@ -134,6 +139,13 @@ ensureColumn("animes", "series_title", "series_title TEXT DEFAULT ''");
 ensureColumn("animes", "watch_status", "watch_status TEXT DEFAULT 'none'");
 ensureColumn("downloads", "source", "source TEXT DEFAULT 'manual'");
 
+function syncConfigDefault(key: string, nextValue: string, legacyValues: string[]) {
+  const row = db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key);
+  if (!row) return;
+  if (!legacyValues.includes(row.value)) return;
+  db.run(`UPDATE config SET value = ? WHERE key = ?`, [nextValue, key]);
+}
+
 // ── anime_rules ────────────────────────────────────────────────────────────
 db.run(`
   CREATE TABLE IF NOT EXISTS anime_rules (
@@ -184,7 +196,7 @@ const defaultConfig: Record<string, string> = {
   language:         "pt-BR",
   naming_scheme:    "jellyfin",
   prefer_sub:       "true",
-  allow_simulated_downloads: "true",
+  allow_simulated_downloads: "false",
   yt_dlp_path:      "yt-dlp",
   ffmpeg_path:      "ffmpeg",
   auto_retry_enabled: "true",
@@ -192,11 +204,11 @@ const defaultConfig: Record<string, string> = {
   retry_base_delay_seconds: "20",
   retry_max_delay_seconds: "900",
   // qBittorrent
-  qbittorrent_enabled:  "false",
-  qbittorrent_host:     "http://localhost:8080",
+  qbittorrent_enabled:  defaultQbEnabled,
+  qbittorrent_host:     defaultQbHost,
   qbittorrent_username: "admin",
   qbittorrent_password: "adminadmin",
-  qbittorrent_save_path: "",
+  qbittorrent_save_path: defaultQbSavePath,
   // Nyaa.si
   nyaa_preferred_group:      "SubsPlease",
   nyaa_preferred_resolution: "1080p",
@@ -208,5 +220,12 @@ for (const [k, v] of Object.entries(defaultConfig)) {
   insertCfg.run({ $k: k, $v: v });
 }
 // Nao sobrescreve valores ja configurados no banco.
+
+if (isDockerRuntime) {
+  syncConfigDefault("qbittorrent_host", defaultQbHost, ["http://localhost:8080"]);
+  if (defaultQbSavePath) {
+    syncConfigDefault("qbittorrent_save_path", defaultQbSavePath, [""]);
+  }
+}
 
 export default db;

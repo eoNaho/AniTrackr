@@ -5,7 +5,7 @@
 import { Elysia, t } from "elysia";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "fs";
-import { dirname, extname, resolve } from "path";
+import { dirname, extname, isAbsolute, normalize, relative, resolve } from "path";
 import { searchNyaa } from "../services/nyaa.ts";
 import { searchAniRena } from "../services/anirena.ts";
 import {
@@ -30,14 +30,21 @@ const monitoredHashes = new Map<string, { jobId: string; animeId: string; episod
 let _monitorInterval: ReturnType<typeof setInterval> | null = null;
 
 function normalizePathForCompare(pathValue: string): string {
-  return resolve(pathValue).replace(/[\\/]+/g, "\\").toLowerCase();
+  const normalized = normalize(resolve(pathValue));
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isPathInside(parentPath: string, candidatePath: string): boolean {
+  const parent = normalizePathForCompare(parentPath);
+  const candidate = normalizePathForCompare(candidatePath);
+  const rel = relative(parent, candidate);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function cleanupEmptyParents(startDir: string, stopDir: string) {
   let current = startDir;
-  const normalizedStop = normalizePathForCompare(stopDir);
 
-  while (current && normalizePathForCompare(current).startsWith(normalizedStop)) {
+  while (current && isPathInside(stopDir, current)) {
     if (!existsSync(current) || !statSync(current).isDirectory()) break;
 
     try {
@@ -210,12 +217,13 @@ export const torrentRoutes = new Elysia()
     };
     if (!q?.trim()) return { error: "Parametro q eh obrigatorio" };
 
+    const defaultCategory = getConfig("nyaa_default_category") || "1_2";
     const preferredGroup = group || getConfig("nyaa_preferred_group");
     const preferredResolution = resolution || getConfig("nyaa_preferred_resolution");
 
     try {
       const results = await searchNyaa(q, {
-        category: category || "1_2",
+        category: category || defaultCategory,
         preferredGroup: preferredGroup || undefined,
         preferredResolution: preferredResolution || undefined,
         limit: parseInt(limit ?? "30"),
