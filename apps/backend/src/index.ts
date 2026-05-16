@@ -8,6 +8,13 @@ import { configRoutes } from "./routes/config.ts";
 import { jellyfinRoutes } from "./routes/jellyfin.ts";
 import { subtitleRoutes } from "./routes/subtitles.ts";
 import { torrentRoutes, startTorrentMonitor, restoreTorrentMonitors } from "./routes/torrent.ts";
+import { diagnosticsRoutes } from "./routes/diagnostics.ts";
+import { calendarRoutes } from "./routes/calendar.ts";
+import { collectionsRoutes } from "./routes/collections.ts";
+import { dashboardRoutes } from "./routes/dashboard.ts";
+import { franchiseRoutes } from "./routes/franchise.ts";
+import { integrityRoutes } from "./routes/integrity.ts";
+import { discoverRoutes } from "./routes/discover.ts";
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
 import { runBackupIfDue } from "./services/backup.ts";
@@ -45,6 +52,13 @@ const app = new Elysia()
       .use(jellyfinRoutes)
       .use(subtitleRoutes)
       .use(torrentRoutes)
+      .use(diagnosticsRoutes)
+      .use(calendarRoutes)
+      .use(collectionsRoutes)
+      .use(dashboardRoutes)
+      .use(franchiseRoutes)
+      .use(integrityRoutes)
+      .use(discoverRoutes)
       // ── Auto-schedule (registrado aqui para garantir que o módulo já foi inicializado) ──
       .get("/auto-schedule/status", () => getAutoScheduleStatus())
       .post("/auto-schedule/run", async () => {
@@ -61,10 +75,13 @@ const app = new Elysia()
           WHERE status = 'completed' AND completed_at IS NOT NULL
           GROUP BY month ORDER BY month DESC LIMIT 12
         `).all();
-        const byProvider = db.query<{ provider: string; completed: number; failed: number }, []>(`
+        const byProvider = db.query<{ provider: string; completed: number; failed: number; success_rate: number }, []>(`
           SELECT provider,
                  SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
-                 SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed
+                 SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed,
+                 ROUND(
+                   (SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) * 100.0 / COUNT(*)), 1
+                 ) as success_rate
           FROM downloads GROUP BY provider ORDER BY completed DESC
         `).all();
         const totals = db.query<{ total: number; completed: number; failed: number; total_bytes: number }, []>(`
@@ -74,7 +91,17 @@ const app = new Elysia()
                  COALESCE(SUM(CASE WHEN status='completed' THEN total_bytes ELSE 0 END),0) as total_bytes
           FROM downloads
         `).get() ?? { total: 0, completed: 0, failed: 0, total_bytes: 0 };
-        return { byMonth, byProvider, totals };
+        const autoScheduleCount = db.query<{ count: number }, []>(
+          `SELECT COUNT(*) as count FROM downloads WHERE source = 'auto-schedule'`
+        ).get()?.count ?? 0;
+        const volumeByMonth = db.query<{ month: string; size_gb: number }, []>(`
+          SELECT strftime('%Y-%m', completed_at) as month,
+                 ROUND(SUM(total_bytes) / 1073741824.0, 2) as size_gb
+          FROM downloads
+          WHERE status = 'completed' AND completed_at IS NOT NULL
+          GROUP BY month ORDER BY month DESC LIMIT 12
+        `).all();
+        return { byMonth, byProvider, totals, autoScheduleCount, volumeByMonth };
       })
   )
 

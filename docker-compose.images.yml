@@ -23,6 +23,9 @@ services:
     image: ghcr.io/${ANITRACKR_IMAGE_OWNER:-eonaho}/${ANITRACKR_IMAGE_REPO:-anitrackr}-web:${ANITRACKR_IMAGE_TAG:-latest}
     container_name: anitrackr-web
     restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: ""
+      BACKEND_INTERNAL_URL: "http://backend:3001"
     depends_on:
       backend:
         condition: service_healthy

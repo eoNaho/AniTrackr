@@ -274,6 +274,7 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
         anilist_status = ?,
         episode_count = COALESCE(NULLIF(episode_count, 0), ?),
         episode_length = COALESCE(NULLIF(episode_length, 0), ?),
+        next_release = ?,
         series_title = COALESCE(NULLIF(series_title, ''), ?),
         year = COALESCE(NULLIF(year, 0), ?),
         updated_at = datetime('now')
@@ -293,6 +294,9 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
       formatted.status,
       formatted.episodeCount ?? null,
       formatted.episodeLength ?? null,
+      formatted.nextAiringEpisode?.airingAt
+        ? new Date(formatted.nextAiringEpisode.airingAt * 1000).toISOString()
+        : null,
       resolvedSeriesTitle,
       formatted.year ?? null,
       anime.id,

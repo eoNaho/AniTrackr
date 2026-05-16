@@ -1,4 +1,5 @@
 import Elysia, { t } from "elysia";
+import { existsSync } from "fs";
 import { searchSubtitles, getDownloadLink, fetchAndSaveSubtitle } from "../services/opensubtitles.ts";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
@@ -111,6 +112,77 @@ export const subtitleRoutes = new Elysia({ prefix: "/subtitles" })
       animeId: t.String(),
       episodeNumber: t.Number(),
       languages: t.Optional(t.Array(t.String())),
+    }),
+  })
+
+  // GET /api/subtitles/missing — episódios baixados sem arquivo de legenda
+  .get("/missing", () => {
+    const episodes = db.query<{
+      anime_id: string; anime_title: string; episode_number: number;
+      season: number; file_path: string;
+    }, []>(`
+      SELECT e.anime_id, a.title as anime_title, e.number as episode_number,
+             e.season, e.file_path
+      FROM episodes e
+      JOIN animes a ON a.id = e.anime_id
+      WHERE e.status = 'downloaded'
+        AND e.file_path IS NOT NULL
+        AND e.file_path != ''
+    `).all();
+
+    const missing = episodes.filter((ep) => {
+      const base = ep.file_path.replace(/\.[^.]+$/, "");
+      return !existsSync(`${base}.srt`) && !existsSync(`${base}.pt.srt`) && !existsSync(`${base}.pt-BR.srt`);
+    });
+
+    return { missing, total: missing.length };
+  })
+
+  // POST /api/subtitles/batch — baixa legendas faltantes em lote para um anime
+  .post("/batch", async ({ body }) => {
+    const { animeId, language } = body;
+
+    const anime = db.query<{ title: string; title_english: string | null }, [string]>(
+      `SELECT title, title_english FROM animes WHERE id = ?`
+    ).get(animeId);
+    if (!anime) return { error: "Anime não encontrado" };
+
+    const episodes = db.query<{ number: number; season: number; file_path: string }, [string]>(`
+      SELECT number, season, file_path
+      FROM episodes
+      WHERE anime_id = ? AND status = 'downloaded'
+        AND file_path IS NOT NULL AND file_path != ''
+      ORDER BY number
+    `).all(animeId);
+
+    const langs = language ? [language] : ["pt-BR", "pt", "en"];
+    const query = anime.title_english ?? anime.title;
+    const results: { episode: number; status: "ok" | "failed"; path?: string }[] = [];
+
+    for (const ep of episodes) {
+      if (!ep.file_path) continue;
+      const path = await fetchAndSaveSubtitle({
+        query,
+        season: ep.season,
+        episode: ep.number,
+        videoFilePath: ep.file_path,
+        languages: langs,
+      });
+      results.push({ episode: ep.number, status: path ? "ok" : "failed", path: path ?? undefined });
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+
+    return {
+      ok: true,
+      animeId,
+      total: results.length,
+      downloaded: results.filter((r) => r.status === "ok").length,
+      results,
+    };
+  }, {
+    body: t.Object({
+      animeId: t.String(),
+      language: t.Optional(t.String()),
     }),
   })
 

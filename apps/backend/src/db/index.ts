@@ -131,6 +131,21 @@ ensureColumn("animes", "mal_id", "mal_id INTEGER");
 // Populado a partir das relações AniList (cadeia PREQUEL) para garantir que todas as
 // temporadas de um mesmo anime compartilhem a mesma pasta raiz.
 ensureColumn("animes", "series_title", "series_title TEXT DEFAULT ''");
+ensureColumn("animes", "watch_status", "watch_status TEXT DEFAULT 'none'");
+ensureColumn("downloads", "source", "source TEXT DEFAULT 'manual'");
+
+// ── anime_rules ────────────────────────────────────────────────────────────
+db.run(`
+  CREATE TABLE IF NOT EXISTS anime_rules (
+    anime_id               TEXT PRIMARY KEY REFERENCES animes(id) ON DELETE CASCADE,
+    preferred_provider     TEXT,
+    preferred_quality      TEXT,
+    preferred_download_type TEXT,
+    preferred_language     TEXT,
+    auto_download          INTEGER DEFAULT 1,
+    queue_priority         INTEGER DEFAULT 0
+  )
+`);
 
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_retry_at ON downloads(next_retry_at)`);

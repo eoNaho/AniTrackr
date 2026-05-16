@@ -494,7 +494,7 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
     const allowed = [
       "download_status","downloaded_count","quality","provider","local_path",
       "size_gb","next_release","last_download","ascii_art","poster_url","synopsis",
-      "episode_count","source_url","season_number",
+      "episode_count","source_url","season_number","watch_status",
     ];
     const fields = Object.entries(body as Record<string, unknown>)
       .filter(([k]) => allowed.includes(k));
@@ -585,4 +585,60 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
   }, {
     params: t.Object({ id: t.String() }),
     query: t.Object({ dry: t.Optional(t.String()) }),
-  });
+  })
+
+  // ── Anime Rules ───────────────────────────────────────────────────────────
+
+  // GET /api/library/:id/rules
+  .get("/:id/rules", ({ params }) => {
+    const rule = db.query<{
+      anime_id: string;
+      preferred_provider: string | null;
+      preferred_quality: string | null;
+      preferred_download_type: string | null;
+      preferred_language: string | null;
+      auto_download: number;
+      queue_priority: number;
+    }, [string]>(`SELECT * FROM anime_rules WHERE anime_id = ?`).get(params.id);
+    return rule ?? { anime_id: params.id };
+  }, { params: t.Object({ id: t.String() }) })
+
+  // PUT /api/library/:id/rules
+  .put("/:id/rules", ({ params, body }) => {
+    const {
+      preferredProvider, preferredQuality, preferredDownloadType,
+      preferredLanguage, autoDownload, queuePriority,
+    } = body as {
+      preferredProvider?: string; preferredQuality?: string;
+      preferredDownloadType?: string; preferredLanguage?: string;
+      autoDownload?: number; queuePriority?: number;
+    };
+    db.run(`
+      INSERT INTO anime_rules
+        (anime_id, preferred_provider, preferred_quality, preferred_download_type,
+         preferred_language, auto_download, queue_priority)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(anime_id) DO UPDATE SET
+        preferred_provider = excluded.preferred_provider,
+        preferred_quality = excluded.preferred_quality,
+        preferred_download_type = excluded.preferred_download_type,
+        preferred_language = excluded.preferred_language,
+        auto_download = excluded.auto_download,
+        queue_priority = excluded.queue_priority
+    `, [
+      params.id,
+      preferredProvider ?? null,
+      preferredQuality ?? null,
+      preferredDownloadType ?? null,
+      preferredLanguage ?? null,
+      autoDownload ?? 1,
+      queuePriority ?? 0,
+    ]);
+    return { ok: true };
+  }, { params: t.Object({ id: t.String() }) })
+
+  // DELETE /api/library/:id/rules
+  .delete("/:id/rules", ({ params }) => {
+    db.run(`DELETE FROM anime_rules WHERE anime_id = ?`, [params.id]);
+    return { ok: true };
+  }, { params: t.Object({ id: t.String() }) });

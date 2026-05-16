@@ -37,6 +37,10 @@ import { AnimeView, ConfirmDialog } from "./ui";
 import { LibraryView } from "./library-view";
 import { SearchView } from "./search-view";
 import { SettingsView } from "./settings-view";
+import { DashboardView } from "./dashboard-view";
+import { CalendarView } from "./calendar-view";
+import { DiagnosticsPanel } from "./diagnostics-panel";
+import { IntegrityView } from "./integrity-view";
 
 function fmtGb(v: number) {
   return `${v.toFixed(1)} GB`;
@@ -65,7 +69,7 @@ function mapAnime(a: LibraryAnime): AnimeView {
   };
 }
 
-type Mode = "library" | "search" | "settings";
+type Mode = "dashboard" | "library" | "calendar" | "search" | "diagnostics" | "integrity" | "settings";
 type LogEntry = { time: string; module: string; text: string };
 type StreamState = "connecting" | "live" | "fallback";
 type SearchEpisode = { key: string; number: number; label: string; url: string };
@@ -195,8 +199,19 @@ function inferEpisodeNumber(episode: { number: number; label: string; url: strin
   return fallback;
 }
 
+function requestNotificationPermission() {
+  if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+function sendNotification(title: string, body: string) {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+  new Notification(title, { body, icon: "/favicon.ico" });
+}
+
 export function TrackerHome() {
-  const [mode, setMode] = useState<Mode>("library");
+  const [mode, setMode] = useState<Mode>("dashboard");
   const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
   const [backendStatus, setBackendStatus] = useState<"connecting" | "online" | "offline">("connecting");
   const [providers, setProviders] = useState<string[]>([]);
@@ -235,6 +250,8 @@ export function TrackerHome() {
 
   const selectVersionRef = useRef(0);
   const prevJobStatusRef = useRef<Map<string, string>>(new Map());
+  const prevCompletedRef = useRef<Set<string>>(new Set());
+  const prevFailedRef = useRef<Set<string>>(new Set());
 
   const pushLog = useCallback((module: string, text: string) => {
     setLogs((cur) => [
@@ -310,6 +327,24 @@ export function TrackerHome() {
 
         if (payload.type === "snapshot" || payload.type === "progress") {
           setDownloadJobs(payload.jobs);
+          // Notificações de download concluído / falha permanente
+          for (const job of payload.jobs) {
+            if (job.status === "completed" && !prevCompletedRef.current.has(job.id)) {
+              prevCompletedRef.current.add(job.id);
+              sendNotification("Download concluído", `${job.animeTitle} — Ep. ${job.episodeNumber}`);
+            }
+            if (
+              job.status === "failed" &&
+              job.attemptCount >= job.maxAttempts &&
+              !prevFailedRef.current.has(job.id)
+            ) {
+              prevFailedRef.current.add(job.id);
+              sendNotification(
+                "Falha no download",
+                `${job.animeTitle} — Ep. ${job.episodeNumber}: ${job.errorMsg ?? "erro desconhecido"}`
+              );
+            }
+          }
           return;
         }
 
@@ -790,8 +825,18 @@ export function TrackerHome() {
             ANITRACKR-DOWNLOAD-TRACKER v2.0.1<span className="blink ml-1">_</span>
           </div>
 
-          <nav className="flex gap-1">
-            {(["library", "search", "settings"] as Mode[]).map((m) => (
+          <nav className="flex flex-wrap gap-1">
+            {(
+              [
+                ["dashboard", "início"],
+                ["library", "biblioteca"],
+                ["calendar", "calendário"],
+                ["search", "busca"],
+                ["diagnostics", "diagnóstico"],
+                ["integrity", "integridade"],
+                ["settings", "⚙ config"],
+              ] as [Mode, string][]
+            ).map(([m, label]) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -801,7 +846,7 @@ export function TrackerHome() {
                     : "border-[#45475a] text-[#6c7086] hover:border-[#cba6f7] hover:text-[#cba6f7]"
                 }`}
               >
-                [{m === "settings" ? "⚙ config" : m}]
+                [{label}]
               </button>
             ))}
           </nav>
@@ -837,6 +882,17 @@ export function TrackerHome() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-5">
+          {mode === "dashboard" && (
+            <DashboardView
+              onSelectAnime={(id) => {
+                const idx = animes.findIndex((a) => a.id === id);
+                if (idx >= 0) { setSelectedIndex(idx); setMode("library"); }
+              }}
+            />
+          )}
+          {mode === "calendar" && <CalendarView />}
+          {mode === "diagnostics" && <DiagnosticsPanel />}
+          {mode === "integrity" && <IntegrityView />}
           {mode === "library" && (
             <LibraryView
               animes={animes}

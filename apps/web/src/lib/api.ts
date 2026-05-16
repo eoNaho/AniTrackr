@@ -587,3 +587,195 @@ export async function triggerAutoSchedule() {
   }
   return response.json() as Promise<{ ok: boolean; message: string }>;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tipos — novas features
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type WatchStatus = "none" | "planned" | "watching" | "paused" | "completed" | "dropped";
+
+export type DiagnosticsReport = {
+  providers: {
+    all: Record<string, { state: string; failures: number; lastFailureAt: string; lastSuccessAt: string }>;
+    open: Array<{ name: string; state: string; failures: number }>;
+  };
+  recentFailures: Array<{
+    anime_id: string; episode_number: number;
+    error_msg: string | null; last_error_code: string | null;
+  }>;
+  qbittorrent: { enabled: boolean; connected: boolean; version: string | null };
+  downloadPath: { path: string; accessible: boolean };
+  summary: { providersDown: number; recentFailures: number; hasIssues: boolean };
+};
+
+export type DashboardAnime = {
+  id: string; title: string; poster_url: string | null;
+  episode_count: number; downloaded_count: number;
+  last_download?: string | null; missing_count?: number;
+  download_status?: string;
+};
+
+export type DashboardData = {
+  recentlyDownloaded: DashboardAnime[];
+  inProgress: DashboardAnime[];
+  missingEpisodes: DashboardAnime[];
+  completed: DashboardAnime[];
+};
+
+export type CalendarEntry = {
+  id: string;
+  anilist_id: number | null;
+  title: string;
+  poster_url: string | null;
+  next_release: string;
+  season_number: number;
+  downloaded_count: number;
+  episode_count: number;
+  anilist_status: string;
+  watch_status: string;
+  auto_download: number;
+  queue_priority: number;
+  is_library: boolean;
+  is_tracked: boolean;
+  episode_number: number | null;
+  source: "library" | "discover";
+  provider: string | null;
+  source_url: string | null;
+};
+
+export type CollectionItem = {
+  id: string; title: string; poster_url: string | null;
+  downloaded_count?: number; episode_count?: number;
+};
+
+export type CollectionsData = {
+  releasing: CollectionItem[];
+  complete: CollectionItem[];
+  withRecentFailures: CollectionItem[];
+  unwatched: CollectionItem[];
+  incompleteMetadata: Array<{ id: string; title: string }>;
+  paused: CollectionItem[];
+};
+
+export type AnimeRule = {
+  anime_id: string;
+  preferred_provider?: string | null;
+  preferred_quality?: string | null;
+  preferred_download_type?: string | null;
+  preferred_language?: string | null;
+  auto_download?: number;
+  queue_priority?: number;
+};
+
+export type FranchiseEntry = {
+  id: string; title: string; season_number: number;
+  poster_url: string | null; episode_count: number;
+  downloaded_count: number; download_status: string;
+  anilist_status: string; year: number | null; watch_status: string;
+};
+
+export type FranchiseData = {
+  seriesTitle: string;
+  entries: FranchiseEntry[];
+  totalSeasons: number;
+};
+
+export type IntegrityReport = {
+  orphanedFiles: { count: number; items: Array<{ id: string; anime_id: string; number: number; file_path: string }> };
+  duplicateEpisodes: { count: number; items: Array<{ anime_id: string; number: number; season: number; count: number }> };
+  missingMetadata: {
+    noPoster: { count: number; items: Array<{ id: string; title: string }> };
+    noSynopsis: { count: number; items: Array<{ id: string; title: string }> };
+  };
+  summary: { totalIssues: number; hasIssues: boolean };
+};
+
+export type Recommendation = {
+  anilistId: number;
+  title: string | null;
+  titleRomaji: string;
+  relationType: string;
+  format: string;
+};
+
+export type DownloadHistoryInsights = {
+  byMonth: Array<{ month: string; count: number; total_bytes: number }>;
+  byProvider: Array<{ provider: string; completed: number; failed: number; success_rate: number }>;
+  totals: { total: number; completed: number; failed: number; total_bytes: number };
+  autoScheduleCount: number;
+  volumeByMonth: Array<{ month: string; size_gb: number }>;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Funções — novas features
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const fetchDashboard = () =>
+  requestJson<DashboardData>("/api/dashboard");
+
+export const fetchCollections = () =>
+  requestJson<CollectionsData>("/api/collections");
+
+export const fetchCalendar = (range: "week" | "month" = "week") =>
+  requestJson<{ range: string; priority: CalendarEntry[]; discover: CalendarEntry[]; recentlyDetected: unknown[] }>(
+    `/api/calendar?range=${range}`
+  );
+
+export const fetchDiagnostics = () =>
+  requestJson<DiagnosticsReport>("/api/diagnostics");
+
+export const fetchDownloadHistoryInsights = () =>
+  requestJson<DownloadHistoryInsights>("/api/downloads/history");
+
+export const fetchAnimeRules = (animeId: string) =>
+  requestJson<AnimeRule>(`/api/library/${animeId}/rules`);
+
+export const saveAnimeRules = (animeId: string, rules: Omit<AnimeRule, "anime_id">) =>
+  requestJsonWithBodyError<{ ok: boolean }>(`${getBackendUrl()}/api/library/${animeId}/rules`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rules),
+  });
+
+export const deleteAnimeRules = (animeId: string) =>
+  requestJsonWithBodyError<{ ok: boolean }>(`${getBackendUrl()}/api/library/${animeId}/rules`, {
+    method: "DELETE",
+  });
+
+export const fetchFranchises = () =>
+  requestJson<{ franchises: Array<{ series_title: string; season_count: number; total_eps: number; downloaded_count: number }> }>(
+    "/api/franchise"
+  );
+
+export const fetchFranchise = (seriesTitle: string) =>
+  requestJson<FranchiseData>(`/api/franchise/${encodeURIComponent(seriesTitle)}`);
+
+export const fetchIntegrity = () =>
+  requestJson<IntegrityReport>("/api/integrity");
+
+export const fetchMissingSubtitles = () =>
+  requestJson<{ missing: Array<{ anime_id: string; anime_title: string; episode_number: number; season: number; file_path: string }>; total: number }>(
+    "/api/subtitles/missing"
+  );
+
+export const batchDownloadSubtitles = (animeId: string, language?: string) =>
+  requestJsonWithBodyError<{ ok: boolean; total: number; downloaded: number; results: unknown[] }>(
+    `${getBackendUrl()}/api/subtitles/batch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ animeId, language }),
+    }
+  );
+
+export const fetchRecommendations = (basedOn: string) =>
+  requestJson<{ basedOn: string; basedOnTitle: string; recommendations: Recommendation[] }>(
+    `/api/discover?basedOn=${encodeURIComponent(basedOn)}`
+  );
+
+export const updateWatchStatus = (animeId: string, watchStatus: WatchStatus) =>
+  requestJsonWithBodyError<{ ok: boolean }>(`${getBackendUrl()}/api/library/${animeId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ watch_status: watchStatus }),
+  });

@@ -4,6 +4,7 @@
  */
 
 import db from "../db/index.ts";
+import { getAniListAnime } from "./anilist.ts";
 import { getEpisodesWithFallback, type Provider } from "./provider-chain.ts";
 import { enqueueDownloads } from "./downloader.ts";
 import { logger } from "../utils/logger.ts";
@@ -29,10 +30,16 @@ async function checkAndSchedule() {
     source_url: string | null;
     downloaded_count: number;
     season_number: number;
+    auto_download: number;
   }, []>(
-    `SELECT id, title, anilist_id, provider, source_url, downloaded_count, season_number
-     FROM animes
-     WHERE is_tracked = 1 AND anilist_status = 'RELEASING' AND source_url IS NOT NULL`
+    `SELECT a.id, a.title, a.anilist_id, a.provider, a.source_url, a.downloaded_count, a.season_number,
+            COALESCE(r.auto_download, 1) AS auto_download
+     FROM animes a
+     LEFT JOIN anime_rules r ON r.anime_id = a.id
+     WHERE a.is_tracked = 1
+       AND a.anilist_status = 'RELEASING'
+       AND a.source_url IS NOT NULL
+       AND COALESCE(r.auto_download, 1) = 1`
   ).all();
 
   if (!releasing.length) return;
@@ -57,12 +64,21 @@ async function checkAndSchedule() {
 async function checkAnime(anime: {
   id: string;
   title: string;
+  anilist_id: number;
   provider: string;
   source_url: string | null;
   downloaded_count: number;
   season_number: number;
 }): Promise<number> {
   if (!anime.source_url) return 0;
+
+  if (anime.anilist_id) {
+    const anilistData = await getAniListAnime(anime.anilist_id).catch(() => null);
+    const nextReleaseIso = anilistData?.nextAiringEpisode?.airingAt
+      ? new Date(anilistData.nextAiringEpisode.airingAt * 1000).toISOString()
+      : null;
+    db.run(`UPDATE animes SET next_release = ?, updated_at = datetime('now') WHERE id = ?`, [nextReleaseIso, anime.id]);
+  }
 
   // Episódios já baixados ou em fila
   const existing = new Set(

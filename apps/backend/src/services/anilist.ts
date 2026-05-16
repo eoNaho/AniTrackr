@@ -67,6 +67,28 @@ export interface AniListEpisode {
   length: number | null;
 }
 
+export interface AniListAiringEntry {
+  airingAt: number;
+  episode: number;
+  media: {
+    id: number;
+    idMal: number | null;
+    title: {
+      romaji: string;
+      english: string | null;
+      native: string | null;
+    };
+    coverImage: { large: string; extraLarge: string; medium: string };
+    status: AniListAnime["status"];
+    episodes: number | null;
+    format: string;
+    popularity: number;
+    isAdult: boolean;
+    countryOfOrigin: string | null;
+    nextAiringEpisode: { episode: number; airingAt: number } | null;
+  };
+}
+
 const SEARCH_QUERY = `
 query ($query: String, $page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
@@ -133,6 +155,33 @@ query ($mediaId: Int, $page: Int) {
   }
 }`;
 
+const UPCOMING_AIRING_QUERY = `
+query ($from: Int, $to: Int, $page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    airingSchedules(
+      airingAt_greater: $from
+      airingAt_lesser: $to
+      sort: TIME
+    ) {
+      episode
+      airingAt
+      media {
+        id
+        idMal
+        title { romaji english native }
+        coverImage { large extraLarge medium }
+        status
+        episodes
+        format
+        popularity
+        isAdult
+        countryOfOrigin
+        nextAiringEpisode { episode airingAt }
+      }
+    }
+  }
+}`;
+
 async function gql<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
   try {
     const res = await fetch(ANILIST_URL, {
@@ -183,6 +232,23 @@ export async function getAiringSchedule(
     airingAt: s.airingAt,
     duration: s.media?.duration ?? null,
   }));
+}
+
+export async function getUpcomingAiringSchedule(
+  fromUnix: number,
+  toUnix: number,
+  page = 1,
+  perPage = 50
+): Promise<AniListAiringEntry[]> {
+  const data = await gql<{
+    Page: { airingSchedules: AniListAiringEntry[] };
+  }>(UPCOMING_AIRING_QUERY, {
+    from: fromUnix,
+    to: toUnix,
+    page,
+    perPage,
+  });
+  return data?.Page?.airingSchedules ?? [];
 }
 
 /**
