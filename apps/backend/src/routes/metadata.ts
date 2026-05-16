@@ -6,6 +6,7 @@ import { jikanSearchAnime, jikanGetEpisode, jikanGetAllEpisodes } from "../servi
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { randomUUID } from "crypto";
+import { stripSeasonSuffix } from "../services/naming.ts";
 
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -30,6 +31,105 @@ function asNullableFiniteNumber(value: unknown): number | null {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
+  return null;
+}
+
+function jsonError(message: string, status = 400) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function normalizeAscii(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function cleanSearchCandidate(value: string): string {
+  return stripSeasonSuffix(value)
+    .replace(/\((?:dublado|legendado|dub|sub)\)/gi, " ")
+    .replace(/\b(?:dublado|legendado|dub|sub)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function uniqueCandidates(...values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const value of values) {
+    if (!value?.trim()) continue;
+    for (const candidate of [value.trim(), cleanSearchCandidate(value)]) {
+      if (!candidate) continue;
+      const key = normalizeAscii(candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+async function resolveAniListForAnime(input: {
+  title: string;
+  titleEnglish: string | null;
+  titleRomaji?: string | null;
+  seriesTitle?: string | null;
+}): Promise<Awaited<ReturnType<typeof getAniListAnime>> | Awaited<ReturnType<typeof searchAniList>>[number] | null> {
+  const candidates = uniqueCandidates(
+    input.titleEnglish,
+    input.titleRomaji,
+    input.seriesTitle,
+    input.title,
+  );
+
+  for (const candidate of candidates) {
+    const results = await searchAniList(candidate, 1, 5);
+    if (!results.length) continue;
+
+    const preferred = results.find((result) => {
+      const haystack = normalizeAscii(
+        [result.title.romaji, result.title.english, result.title.native].filter(Boolean).join(" ")
+      );
+      const needle = normalizeAscii(cleanSearchCandidate(candidate));
+      return haystack.includes(needle);
+    });
+
+    return preferred ?? results[0];
+  }
+
+  return null;
+}
+
+async function resolveMalIdForAnime(input: {
+  title: string;
+  titleEnglish: string | null;
+  titleRomaji?: string | null;
+  seriesTitle?: string | null;
+}): Promise<number | null> {
+  const candidates = uniqueCandidates(
+    input.titleEnglish,
+    input.titleRomaji,
+    input.seriesTitle,
+    input.title,
+  );
+
+  for (const candidate of candidates) {
+    const results = await jikanSearchAnime(candidate);
+    if (!results.length) continue;
+
+    const preferred = results.find((result) => {
+      const haystack = normalizeAscii([result.title, result.titleEnglish].filter(Boolean).join(" "));
+      const needle = normalizeAscii(cleanSearchCandidate(candidate));
+      return haystack.includes(needle);
+    });
+
+    const match = preferred ?? results[0];
+    if (match?.malId) return match.malId;
+  }
+
   return null;
 }
 
@@ -132,23 +232,32 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
   // POST /api/metadata/enrich/:id — enriquece anime da biblioteca com dados AniList
   .post("/enrich/:id", async ({ params }) => {
     const anime = db.query<{
-      id: string; title: string; title_english: string | null; anilist_id: number | null;
-    }, [string]>(`SELECT id, title, title_english, anilist_id FROM animes WHERE id = ?`).get(params.id);
+      id: string;
+      title: string;
+      title_english: string | null;
+      title_romaji: string | null;
+      series_title: string | null;
+      anilist_id: number | null;
+    }, [string]>(`SELECT id, title, title_english, title_romaji, series_title, anilist_id FROM animes WHERE id = ?`).get(params.id);
 
-    if (!anime) return { error: "Anime não encontrado na biblioteca" };
+    if (!anime) return jsonError("Anime não encontrado na biblioteca", 404);
 
     let anilistData = null;
     if (anime.anilist_id) {
       anilistData = await getAniListAnime(anime.anilist_id);
     } else {
-      const searchTerm = anime.title_english ?? anime.title;
-      const results = await searchAniList(searchTerm, 1, 1);
-      if (results.length > 0) anilistData = results[0];
+      anilistData = await resolveAniListForAnime({
+        title: anime.title,
+        titleEnglish: anime.title_english,
+        titleRomaji: anime.title_romaji,
+        seriesTitle: anime.series_title,
+      });
     }
 
-    if (!anilistData) return { error: "Não foi possível encontrar dados AniList" };
+    if (!anilistData) return jsonError("Não foi possível encontrar dados AniList", 404);
 
     const formatted = formatAniListAnime(anilistData);
+    const resolvedSeriesTitle = resolveSeriesRootTitle(anilistData, anime.title);
     db.run(`
       UPDATE animes SET
         anilist_id = ?,
@@ -165,6 +274,7 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
         anilist_status = ?,
         episode_count = COALESCE(NULLIF(episode_count, 0), ?),
         episode_length = COALESCE(NULLIF(episode_length, 0), ?),
+        series_title = COALESCE(NULLIF(series_title, ''), ?),
         year = COALESCE(NULLIF(year, 0), ?),
         updated_at = datetime('now')
       WHERE id = ?
@@ -183,6 +293,7 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
       formatted.status,
       formatted.episodeCount ?? null,
       formatted.episodeLength ?? null,
+      resolvedSeriesTitle,
       formatted.year ?? null,
       anime.id,
     ]);
@@ -219,13 +330,33 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
 
   // POST /api/metadata/jikan/enrich/:id — sincroniza episódios da biblioteca com dados Jikan
   .post("/jikan/enrich/:id", async ({ params }) => {
-    const anime = db.query<{ id: string; title: string; mal_id: number | null }, [string]>(
-      `SELECT id, title, mal_id FROM animes WHERE id = ?`
+    const anime = db.query<{
+      id: string;
+      title: string;
+      title_english: string | null;
+      title_romaji: string | null;
+      series_title: string | null;
+      mal_id: number | null;
+    }, [string]>(
+      `SELECT id, title, title_english, title_romaji, series_title, mal_id FROM animes WHERE id = ?`
     ).get(params.id);
-    if (!anime) return { error: "Anime não encontrado" };
-    if (!anime.mal_id) return { error: "Anime não possui mal_id. Enriqueça com AniList primeiro." };
+    if (!anime) return jsonError("Anime não encontrado", 404);
 
-    const episodes = await jikanGetAllEpisodes(anime.mal_id);
+    let malId = anime.mal_id;
+    if (!malId) {
+      malId = await resolveMalIdForAnime({
+        title: anime.title,
+        titleEnglish: anime.title_english,
+        titleRomaji: anime.title_romaji,
+        seriesTitle: anime.series_title,
+      });
+      if (malId) {
+        db.run(`UPDATE animes SET mal_id = ?, updated_at = datetime('now') WHERE id = ?`, [malId, anime.id]);
+      }
+    }
+    if (!malId) return jsonError("Anime não possui mal_id e não foi possível resolvê-lo automaticamente.", 422);
+
+    const episodes = await jikanGetAllEpisodes(malId);
     if (!episodes.length) return { ok: true, enriched: 0, message: "Nenhum episódio retornado pelo Jikan" };
 
     const update = db.prepare(
@@ -265,13 +396,13 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
         if (anime.anilist_id) {
           const anilistData = await getAniListAnime(anime.anilist_id);
           if (anilistData) {
-            seriesTitle = resolveSeriesRootTitle(anilistData);
+            seriesTitle = resolveSeriesRootTitle(anilistData, anime.title);
           }
         }
 
         if (!seriesTitle) {
           const { stripSeasonSuffix } = await import("../services/naming.ts");
-          seriesTitle = stripSeasonSuffix(anime.title_english ?? anime.title);
+          seriesTitle = stripSeasonSuffix(anime.title);
         }
 
         if (seriesTitle) {

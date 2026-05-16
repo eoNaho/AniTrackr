@@ -114,7 +114,8 @@ export function LibraryView({
     setNfoStatus(`gerando NFO de "${selected.title}"...`);
     try {
       const res = await generateJellyfinNfo(selected.id, true);
-      setNfoStatus(`ok: ${res.episodesNfo} episode.nfo + tvshow.nfo`);
+      const suffix = res.errors.length > 0 ? ` · ${res.errors.length} aviso(s)` : "";
+      setNfoStatus(`ok: ${res.episodesNfo} episode.nfo + tvshow.nfo${suffix}`);
     } catch (err) {
       setNfoStatus(`erro: ${(err as Error).message}`);
     } finally {
@@ -127,7 +128,7 @@ export function LibraryView({
     setNfoStatus("gerando NFO da biblioteca...");
     try {
       const res = await generateAllJellyfinNfo(false);
-      setNfoStatus(`ok: ${res.done}/${res.total} animes processados`);
+      setNfoStatus(`ok: ${res.done}/${res.total} animes processados · ${res.episodesNfoTotal} episode.nfo`);
     } catch (err) {
       setNfoStatus(`erro: ${(err as Error).message}`);
     } finally {
@@ -141,7 +142,8 @@ export function LibraryView({
     setMetaStatus(`Jikan enrich: "${selected.title}"...`);
     try {
       const res = await enrichAnimeJikan(selected.id);
-      setMetaStatus(`Jikan ok: ${res.enriched}/${res.total} episodios`);
+      const total = typeof res.total === "number" ? res.total : res.enriched;
+      setMetaStatus(`Jikan ok: ${res.enriched}/${total} episodios${res.message ? ` · ${res.message}` : ""}`);
       onRefresh();
     } catch (err) {
       setMetaStatus(`Jikan erro: ${(err as Error).message}`);

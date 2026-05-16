@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, statSync } from "fs";
 import { dirname } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
-import { buildPath, stripSeasonSuffix } from "./naming.ts";
+import { buildPath, inferSeasonInfo, stripSeasonSuffix } from "./naming.ts";
 import { getAllAnimeStreamUrl, searchAllAnime } from "./allanime.ts";
 import { animefireEpisodes, animefireSearch } from "./scraper.ts";
 import { resolveDownloadSourceUrl } from "./source-resolver.ts";
@@ -552,16 +552,23 @@ function completeJob(jobId: string, animeId: string, episode: number, season: nu
 }
 
 function simulateDownload(jobId: string, animeId: string, episode: number, season: number) {
-  const anime = db.query<{ title: string; title_english: string | null; year: number | null; series_title: string | null }, [string]>(
-    `SELECT title, title_english, year, series_title FROM animes WHERE id = ?`
+  const anime = db.query<{
+    title: string;
+    title_english: string | null;
+    title_romaji: string | null;
+    year: number | null;
+    series_title: string | null;
+  }, [string]>(
+    `SELECT title, title_english, title_romaji, year, series_title FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return;
 
   const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
   // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
-  const title = anime.series_title || (anime.title_english ?? anime.title);
-  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null);
+  const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
+  const seasonPart = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji).seasonPart;
+  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null, "mkv", seasonPart);
 
   try {
     mkdirSync(dirname(filePath), { recursive: true });
@@ -627,14 +634,21 @@ async function realDownload(
   const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
 
-  const anime = db.query<{ title: string; title_english: string | null; year: number | null; series_title: string | null }, [string]>(
-    `SELECT title, title_english, year, series_title FROM animes WHERE id = ?`
+  const anime = db.query<{
+    title: string;
+    title_english: string | null;
+    title_romaji: string | null;
+    year: number | null;
+    series_title: string | null;
+  }, [string]>(
+    `SELECT title, title_english, title_romaji, year, series_title FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return;
 
   // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
-  const title = anime.series_title || (anime.title_english ?? anime.title);
-  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null);
+  const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
+  const seasonPart = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji).seasonPart;
+  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null, "mkv", seasonPart);
 
   try {
     mkdirSync(dirname(filePath), { recursive: true });
@@ -853,7 +867,7 @@ async function ensureSeriesTitle(animeId: string): Promise<void> {
     try {
       const anilistData = await getAniListAnime(anime.anilist_id);
       if (anilistData) {
-        resolved = resolveSeriesRootTitle(anilistData);
+        resolved = resolveSeriesRootTitle(anilistData, anime.title);
         logger.info("downloader", JSON.stringify({ event: "series_title_resolved_anilist", animeId, resolved }));
       }
     } catch (err) {
@@ -862,7 +876,7 @@ async function ensureSeriesTitle(animeId: string): Promise<void> {
   }
 
   if (!resolved) {
-    resolved = stripSeasonSuffix(anime.title_english ?? anime.title);
+    resolved = stripSeasonSuffix(anime.title);
     logger.info("downloader", JSON.stringify({ event: "series_title_resolved_fallback", animeId, resolved }));
   }
 

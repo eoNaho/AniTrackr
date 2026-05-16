@@ -2,6 +2,24 @@ import { logger } from "../utils/logger.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
 
+function normalizeAscii(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function stripSeriesSuffixLocal(title: string): string {
+  return title
+    .replace(/\s*:?\s*\d{1,2}(?:st|nd|rd|th)?\s+season\b.*/i, "")
+    .replace(/\s*:?\s*season\s+\d{1,2}\b.*/i, "")
+    .replace(/\s*:\s*(?:the\s+)?final\s+season\b.*/i, "")
+    .replace(/\s*:\s*(?:ichi|ni|san|yon|shi|go|roku|nana|shichi|hachi|kyu|ku|juu)\s+no\s+(?:shou|en|kai)\b.*/i, "")
+    .replace(/\s*[-:]?\s*part\s+[\divxlc]+\s*$/i, "")
+    .replace(/\s+(?:ii|iii|iv|vi{0,3}|ix|xi{0,3}|xii|xiii|xiv|xv)\s*$/i, "")
+    .trim();
+}
+
 export interface AniListAnime {
   id: number;
   idMal: number | null;
@@ -173,48 +191,50 @@ export async function getAiringSchedule(
  * Estratégia (sem chamadas extras à API):
  * 1. Percorre os PREQUELs TV já incluídos nas relações do item buscado.
  *    O prequel mais antigo disponível tende a ter o título mais limpo.
- * 2. Prefere o title.english porque a AniList já padroniza como
- *    "Fire Force Season 2", "Fire Force Season 3" etc. — ao aplicar
- *    stripSeasonSuffix obtemos "Fire Force" de forma confiável.
+ * 2. Prefere o title.romaji para manter a mesma família de nomes usada pelos
+ *    providers/scrapers e evitar drift entre "Fire Force" e
+ *    "Enen no Shouboutai". Se não houver romaji, cai para english.
  * 3. Se não houver prequel, usa o título do próprio item após strip.
  */
-export function resolveSeriesRootTitle(a: AniListAnime): string {
+export function resolveSeriesRootTitle(a: AniListAnime, preferredTitleHint?: string | null): string {
   const tvFormats = new Set(["TV", "TV_SHORT"]);
+  const hint = preferredTitleHint ? normalizeAscii(stripSeriesSuffixLocal(preferredTitleHint)) : "";
 
-  // Candidatos: PREQUELs em ordem + título próprio (inglês → romaji)
-  const candidates: string[] = [];
+  const candidates: Array<{ family: "romaji" | "english"; value: string }> = [];
 
   const prequels = (a.relations?.edges ?? [])
     .filter((e) => e.relationType === "PREQUEL" && tvFormats.has(e.node.format))
-    .map((e) => e.node.title.english ?? e.node.title.romaji)
-    .filter(Boolean) as string[];
+    .flatMap((e) => [
+      e.node.title.romaji ? { family: "romaji" as const, value: e.node.title.romaji } : null,
+      e.node.title.english ? { family: "english" as const, value: e.node.title.english } : null,
+    ])
+    .filter(Boolean) as Array<{ family: "romaji" | "english"; value: string }>;
 
   candidates.push(...prequels);
-  if (a.title.english) candidates.push(a.title.english);
-  if (a.title.romaji) candidates.push(a.title.romaji);
+  if (a.title.romaji) candidates.push({ family: "romaji", value: a.title.romaji });
+  if (a.title.english) candidates.push({ family: "english", value: a.title.english });
 
-  for (const candidate of candidates) {
-    // Importa inline para evitar dependência circular — o módulo naming não importa anilist
-    const stripped = candidate
-      // "Fire Force Season 3", "... Season 2"
-      .replace(/\s*:?\s*\d{1,2}(?:st|nd|rd|th)?\s+season\b.*/i, "")
-      .replace(/\s*:?\s*season\s+\d{1,2}\b.*/i, "")
-      // ": The Final Season"
-      .replace(/\s*:\s*(?:the\s+)?final\s+season\b.*/i, "")
-      // ": San no Shou", ": Ni no En" (e variantes)
-      .replace(/\s*:\s*(?:ichi|ni|san|yon|shi|go|roku|nana|shichi|hachi|kyu|ku|juu)\s+no\s+(?:shou|en|kai)\b.*/i, "")
-      // ": Part 2", " Part II"
-      .replace(/\s*[-:]?\s*part\s+[\divxlc]+\s*$/i, "")
-      // Romanos no final: "Overlord III"
-      .replace(/\s+(?:ii|iii|iv|vi{0,3}|ix|xi{0,3}|xii|xiii|xiv|xv)\s*$/i, "")
-      .trim();
+  let preferredFamily: "romaji" | "english" | null = null;
+  if (hint) {
+    preferredFamily = candidates.find((candidate) => normalizeAscii(stripSeriesSuffixLocal(candidate.value)) === hint)?.family ?? null;
+  }
+
+  const orderedCandidates = preferredFamily
+    ? [
+        ...candidates.filter((candidate) => candidate.family === preferredFamily),
+        ...candidates.filter((candidate) => candidate.family !== preferredFamily),
+      ]
+    : candidates;
+
+  for (const candidate of orderedCandidates) {
+    const stripped = stripSeriesSuffixLocal(candidate.value);
 
     if (stripped.length > 0) {
       return stripped;
     }
   }
 
-  return a.title.english ?? a.title.romaji;
+  return stripSeriesSuffixLocal(preferredTitleHint ?? a.title.romaji ?? a.title.english ?? "");
 }
 
 export function formatAniListAnime(a: AniListAnime) {

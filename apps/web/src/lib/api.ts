@@ -19,6 +19,31 @@ async function requestJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestJsonWithBodyError<T>(input: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, init);
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  const errorMessage =
+    payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
+      ? (payload as { error: string }).error
+      : null;
+
+  if (!response.ok) {
+    throw new Error(errorMessage || `Backend request failed: ${response.status} ${response.statusText}`);
+  }
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  return payload as T;
+}
+
 export type BackendHealth = {
   status: string;
   service: string;
@@ -442,46 +467,38 @@ export async function enqueueEpisodes(payload: {
 // ── Jellyfin NFO ──────────────────────────────────────────────────────────────
 
 export async function generateJellyfinNfo(animeId: string, downloadImages = true) {
-  const response = await fetch(
-    `${getBackendUrl()}/api/jellyfin/nfo/${animeId}?images=${downloadImages}`,
-    { method: "POST", headers: { Accept: "application/json" } }
-  );
-  if (!response.ok) throw new Error(`NFO generation failed: ${response.status}`);
-  return response.json() as Promise<{
+  return requestJsonWithBodyError<{
     ok: boolean;
     tvshowNfo: string;
     posterDownloaded: boolean;
     fanartDownloaded: boolean;
     episodesNfo: number;
     errors: string[];
-  }>;
+  }>(
+    `${getBackendUrl()}/api/jellyfin/nfo/${animeId}?images=${downloadImages}`,
+    { method: "POST", headers: { Accept: "application/json" } }
+  );
 }
 
 export async function generateAllJellyfinNfo(downloadImages = false) {
-  const response = await fetch(
+  return requestJsonWithBodyError<{ ok: boolean; total: number; done: number; errors: number; episodesNfoTotal: number }>(
     `${getBackendUrl()}/api/jellyfin/nfo/all?images=${downloadImages}`,
     { method: "POST", headers: { Accept: "application/json" } }
   );
-  if (!response.ok) throw new Error(`NFO all failed: ${response.status}`);
-  return response.json() as Promise<{ ok: boolean; total: number; done: number; errors: number }>;
 }
 
 export async function enrichAnimeJikan(animeId: string) {
-  const response = await fetch(`${getBackendUrl()}/api/metadata/jikan/enrich/${animeId}`, {
+  return requestJsonWithBodyError<{ ok: boolean; enriched: number; total?: number; message?: string }>(`${getBackendUrl()}/api/metadata/jikan/enrich/${animeId}`, {
     method: "POST",
     headers: { Accept: "application/json" },
   });
-  if (!response.ok) throw new Error(`Jikan enrich failed: ${response.status}`);
-  return response.json() as Promise<{ ok: boolean; enriched: number; total: number; message?: string }>;
 }
 
 export async function enrichAnimeAnilist(animeId: string) {
-  const response = await fetch(`${getBackendUrl()}/api/metadata/enrich/${animeId}`, {
+  return requestJsonWithBodyError<{ ok: boolean; anilistId?: number; title?: string; error?: string }>(`${getBackendUrl()}/api/metadata/enrich/${animeId}`, {
     method: "POST",
     headers: { Accept: "application/json" },
   });
-  if (!response.ok) throw new Error(`AniList enrich failed: ${response.status}`);
-  return response.json() as Promise<{ ok: boolean; anilistId?: number; title?: string; error?: string }>;
 }
 
 // ── Episodes individuais ───────────────────────────────────────────────────────

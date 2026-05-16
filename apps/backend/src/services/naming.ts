@@ -19,6 +19,136 @@ export function sanitize(name: string): string {
     .replace(/\.$/, "");
 }
 
+function normalizeAscii(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function parseSafePositiveInt(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1000) return null;
+  return parsed;
+}
+
+function parseRomanNumeral(value: string): number | null {
+  const roman = value.trim().toUpperCase();
+  const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
+  let total = 0;
+  let prev = 0;
+  for (let i = roman.length - 1; i >= 0; i -= 1) {
+    const current = map[roman[i]];
+    if (!current) return null;
+    if (current < prev) total -= current;
+    else total += current;
+    prev = current;
+  }
+  if (total <= 0 || total > 100) return null;
+  return total;
+}
+
+const JAPANESE_NUMBER_MAP: Record<string, number> = {
+  ichi: 1,
+  ni: 2,
+  san: 3,
+  yon: 4,
+  shi: 4,
+  go: 5,
+  roku: 6,
+  nana: 7,
+  shichi: 7,
+  hachi: 8,
+  kyu: 9,
+  ku: 9,
+  juu: 10,
+};
+
+export type SeasonInfo = {
+  seasonNumber: number;
+  seasonPart: number | null;
+};
+
+function inferSeasonNumberFromCandidate(candidate: string): number | null {
+  const direct =
+    candidate.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i)
+    ?? candidate.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
+    ?? candidate.match(/\bs(?:eason)?\s*0?(\d{1,2})\b/i)
+    ?? candidate.match(/\b(\d{1,2})\s*no\s*shou\b/i);
+  if (direct) {
+    const parsed = parseSafePositiveInt(direct[1]);
+    if (parsed != null) return parsed;
+  }
+
+  const romanWithKeyword = candidate.match(/\b(?:season|temporada)\s*([ivxlc]{1,5})\b/i);
+  if (romanWithKeyword) {
+    const parsed = parseRomanNumeral(romanWithKeyword[1]);
+    if (parsed != null) return parsed;
+  }
+
+  const romanSuffix = candidate.match(/\s+(ii|iii|iv|vi{0,3}|ix|xi{0,3}|xii|xiii|xiv|xv)\s*$/i);
+  if (romanSuffix) {
+    const parsed = parseRomanNumeral(romanSuffix[1]);
+    if (parsed != null && parsed >= 2) return parsed;
+  }
+
+  const japaneseNoShou = candidate.match(/\b([a-z]+)\s+no\s+shou\b/i);
+  if (japaneseNoShou) {
+    const parsed = JAPANESE_NUMBER_MAP[japaneseNoShou[1]];
+    if (parsed != null) return parsed;
+  }
+
+  return null;
+}
+
+function inferSeasonPartFromCandidate(candidate: string): number | null {
+  const numeric = candidate.match(/\bpart\s*(\d{1,2})\b/i);
+  if (numeric) {
+    const parsed = parseSafePositiveInt(numeric[1]);
+    if (parsed != null) return parsed;
+  }
+
+  const roman = candidate.match(/\bpart\s*([ivxlc]{1,5})\b/i);
+  if (roman) {
+    const parsed = parseRomanNumeral(roman[1]);
+    if (parsed != null) return parsed;
+  }
+
+  return null;
+}
+
+export function inferSeasonInfo(...candidates: Array<string | null | undefined>): SeasonInfo {
+  let seasonNumber: number | null = null;
+  let seasonPart: number | null = null;
+
+  for (const rawCandidate of candidates) {
+    if (!rawCandidate) continue;
+    const candidate = normalizeAscii(rawCandidate);
+
+    if (seasonNumber == null) {
+      seasonNumber = inferSeasonNumberFromCandidate(candidate);
+    }
+
+    if (seasonPart == null) {
+      seasonPart = inferSeasonPartFromCandidate(candidate);
+    }
+
+    if (seasonNumber != null && seasonPart != null) {
+      break;
+    }
+  }
+
+  return {
+    seasonNumber: seasonNumber ?? 1,
+    seasonPart,
+  };
+}
+
+export function isSeasonDirectoryName(name: string): boolean {
+  return /^season\s+\d{1,3}(?:\s+part\s+\d{1,3})?$/i.test(name.trim());
+}
+
 /**
  * Remove sufixos de temporada do título, retornando o nome base da série.
  * Garante que todas as temporadas de um mesmo anime compartilhem a mesma pasta.
@@ -82,8 +212,10 @@ export function seriesDir(title: string, year?: number | null): string {
 }
 
 /** Pasta da temporada: "Season 01" */
-export function seasonDir(season: number): string {
-  return `Season ${String(season).padStart(2, "0")}`;
+export function seasonDir(season: number, seasonPart?: number | null): string {
+  const base = `Season ${String(season).padStart(2, "0")}`;
+  if (seasonPart == null || seasonPart <= 0) return base;
+  return `${base} Part ${String(seasonPart).padStart(2, "0")}`;
 }
 
 /** Nome do arquivo de episódio: "Sousou no Frieren S01E05.mkv" */
@@ -119,6 +251,7 @@ export function episodePath(
   title: string,
   year: number | null | undefined,
   season: number,
+  seasonPart: number | null | undefined,
   episode: number,
   episodeTitle?: string | null,
   ext = "mkv"
@@ -126,7 +259,7 @@ export function episodePath(
   return join(
     basePath,
     seriesDir(title, year),
-    seasonDir(season),
+    seasonDir(season, seasonPart),
     episodeFilenameWithTitle(title, season, episode, episodeTitle, ext)
   );
 }
@@ -204,10 +337,13 @@ export type NamingScheme = "jellyfin" | "plex" | "simple";
 function normalizeDownloadBase(basePath: string, title: string, year: number | null | undefined): string {
   let p = basePath.trim().replace(/[/\\]+$/, "");
 
-  // Remove todos os níveis de "Season XX" no final do caminho
-  const seasonRe = /[/\\]Season\s+\d{1,3}$/i;
-  while (seasonRe.test(p)) {
-    p = p.replace(seasonRe, "");
+  // Remove todos os níveis de "Season XX" / "Season XX Part YY" no final do caminho
+  while (true) {
+    const parts = p.split(/[/\\]/);
+    const last = parts[parts.length - 1];
+    if (!last || !isSeasonDirectoryName(last)) break;
+    parts.pop();
+    p = parts.join(p.includes("\\") ? "\\" : "/");
   }
 
   // Remove trailing pasta de série que corresponda ao título base (com ou sem ano)
@@ -234,7 +370,8 @@ export function buildPath(
   season: number,
   episode: number,
   episodeTitle?: string | null,
-  ext = "mkv"
+  ext = "mkv",
+  seasonPart?: number | null
 ): string {
   // Título base sem sufixo de temporada: todas as temporadas ficam na mesma pasta
   const baseTitle = stripSeasonSuffix(title);
@@ -249,7 +386,7 @@ export function buildPath(
       const cleanBase = normalizeDownloadBase(basePath, baseTitle, null);
       // year=null: não inclui "(Ano)" na pasta da série, garantindo que S1 (2019) e
       // S3 (2020) do mesmo anime caiam em "Titulo/Season 01" e "Titulo/Season 03"
-      return episodePath(cleanBase, baseTitle, null, season, episode, episodeTitle, ext);
+      return episodePath(cleanBase, baseTitle, null, season, seasonPart ?? null, episode, episodeTitle, ext);
     }
   }
 }

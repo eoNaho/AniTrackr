@@ -2,6 +2,13 @@ import Elysia, { t } from "elysia";
 import { generateNfo, generateNfoAll, downloadPosters } from "../services/jellyfin.ts";
 import { logger } from "../utils/logger.ts";
 
+function jsonError(message: string, status = 500) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 export const jellyfinRoutes = new Elysia({ prefix: "/jellyfin" })
 
   // POST /api/jellyfin/nfo/:id — gera NFO para um anime
@@ -12,7 +19,7 @@ export const jellyfinRoutes = new Elysia({ prefix: "/jellyfin" })
       logger.info("jellyfin", `nfo generated for ${params.id}: ${result.episodesNfo} episode nfos`);
       return { ok: true, ...result };
     } catch (err) {
-      return { error: String(err) };
+      return jsonError(String(err), 500);
     }
   }, {
     params: t.Object({ id: t.String() }),
@@ -34,6 +41,6 @@ export const jellyfinRoutes = new Elysia({ prefix: "/jellyfin" })
       const result = await downloadPosters(params.id);
       return { ok: true, ...result };
     } catch (err) {
-      return { error: String(err) };
+      return jsonError(String(err), 500);
     }
   }, { params: t.Object({ id: t.String() }) });

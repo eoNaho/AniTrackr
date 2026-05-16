@@ -4,7 +4,7 @@ import { basename, dirname, join } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { scanAnime, scanFullLibrary, renameToJellyfin, getMissingEpisodes } from "../services/scanner.ts";
-import { seriesDir, stripSeasonSuffix } from "../services/naming.ts";
+import { inferSeasonInfo, isSeasonDirectoryName, sanitize, stripSeasonSuffix } from "../services/naming.ts";
 import { getAniListAnime, resolveSeriesRootTitle } from "../services/anilist.ts";
 import { randomUUID } from "crypto";
 
@@ -16,7 +16,7 @@ async function resolveAndStoreSeriesTitle(animeId: string, anilistId: number | n
     if (anilistId) {
       const anilistData = await getAniListAnime(anilistId);
       if (anilistData) {
-        seriesTitle = resolveSeriesRootTitle(anilistData);
+        seriesTitle = resolveSeriesRootTitle(anilistData, fallbackTitle);
       }
     }
 
@@ -139,111 +139,18 @@ function normalizeAscii(value: string): string {
     .toLowerCase();
 }
 
-function parseSafePositiveInt(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const n = Number.parseInt(value, 10);
-  if (!Number.isFinite(n) || n <= 0 || n > 1000) return null;
-  return n;
-}
-
-function parseRomanNumeral(value: string): number | null {
-  const roman = value.trim().toUpperCase();
-  const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
-  let total = 0;
-  let prev = 0;
-  for (let i = roman.length - 1; i >= 0; i -= 1) {
-    const cur = map[roman[i]];
-    if (!cur) return null;
-    if (cur < prev) total -= cur;
-    else total += cur;
-    prev = cur;
-  }
-  if (total <= 0 || total > 100) return null;
-  return total;
-}
-
-const JAPANESE_NUMBER_MAP: Record<string, number> = {
-  ichi: 1,
-  ni: 2,
-  san: 3,
-  yon: 4,
-  shi: 4,
-  go: 5,
-  roku: 6,
-  nana: 7,
-  shichi: 7,
-  hachi: 8,
-  kyu: 9,
-  ku: 9,
-  juu: 10,
-};
-
-function inferSeasonNumber(...candidates: Array<string | null | undefined>): number {
-  for (const rawCandidate of candidates) {
-    if (!rawCandidate) continue;
-    const candidate = normalizeAscii(rawCandidate);
-
-    // "Season 3", "Temporada 3", "3rd Season", "S3", "S03"
-    const direct =
-      candidate.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i)
-      ?? candidate.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
-      ?? candidate.match(/\bs(?:eason)?\s*0?(\d{1,2})\b/i)
-      ?? candidate.match(/\b(\d{1,2})\s*no\s*shou\b/i);
-    if (direct) {
-      const parsed = parseSafePositiveInt(direct[1]);
-      if (parsed != null) return parsed;
-    }
-
-    // "Season III", "Temporada III"
-    const romanWithKeyword = candidate.match(/\b(?:season|temporada)\s*([ivxlc]{1,5})\b/i);
-    if (romanWithKeyword) {
-      const parsed = parseRomanNumeral(romanWithKeyword[1]);
-      if (parsed != null) return parsed;
-    }
-
-    // Algarismo romano solto no final do título: "Overlord III", "Fate/Zero II"
-    // Exige pelo menos II (>=2) para não confundir "I" com a letra
-    const romanSuffix = candidate.match(/\s+(ii|iii|iv|vi{0,3}|ix|xi{0,3}|xii|xiii|xiv|xv)\s*$/i);
-    if (romanSuffix) {
-      const parsed = parseRomanNumeral(romanSuffix[1]);
-      if (parsed != null && parsed >= 2) return parsed;
-    }
-
-    // "Part 2", "Part II", ": Part 2", "- Part 2"
-    const partMatch = candidate.match(/\bpart\s*(\d{1,2})\b/i);
-    if (partMatch) {
-      const parsed = parseSafePositiveInt(partMatch[1]);
-      if (parsed != null) return parsed;
-    }
-    const partRoman = candidate.match(/\bpart\s*([ivxlc]{1,5})\b/i);
-    if (partRoman) {
-      const parsed = parseRomanNumeral(partRoman[1]);
-      if (parsed != null) return parsed;
-    }
-
-    // Japonês: "San no Shou", "Ni no Shou"
-    const japaneseNoShou = candidate.match(/\b([a-z]+)\s+no\s+shou\b/i);
-    if (japaneseNoShou) {
-      const parsed = JAPANESE_NUMBER_MAP[japaneseNoShou[1]];
-      if (parsed != null) return parsed;
-    }
-  }
-
-  return 1;
-}
-
 function resolveAnimeLocalPath(baseOrAnimePath: string, preferredTitle: string, year: number | null): string {
   let trimmed = baseOrAnimePath.trim().replace(/[\\/]+$/, "");
   if (!trimmed) return "";
 
-  // Sobe níveis de "Season XX" até encontrar a pasta raiz da série
-  while (/^season\s+\d{1,3}$/i.test(basename(trimmed))) {
+  // Sobe níveis de "Season XX" / "Season XX Part YY" até encontrar a raiz da série.
+  while (isSeasonDirectoryName(basename(trimmed))) {
     const parent = dirname(trimmed);
     if (parent === trimmed) break;
     trimmed = parent;
   }
 
-  const expectedSeriesDir = seriesDir(preferredTitle, year);
+  const expectedSeriesDir = sanitize(stripSeasonSuffix(preferredTitle));
   const baseName = basename(trimmed);
   const normalizedBase = normalizeAscii(baseName);
   const normalizedExpected = normalizeAscii(expectedSeriesDir);
@@ -253,10 +160,15 @@ function resolveAnimeLocalPath(baseOrAnimePath: string, preferredTitle: string, 
     return trimmed;
   }
 
-  // Pasta tem o formato "Título (Ano)" — provável pasta de série com nome diferente
-  // (ex: "Overlord (2015)" ao adicionar "Overlord III (2018)"). Não duplica.
-  if (/^.+\s*\(\d{4}\)$/.test(baseName)) {
+  // Pasta já existe no formato "Título (Ano)" e corresponde à série.
+  if (/^.+\s*\(\d{4}\)$/.test(baseName) && normalizeAscii(sanitize(stripSeasonSuffix(baseName))) === normalizedExpected) {
     return trimmed;
+  }
+
+  // Se o caminho já aponta para uma pasta de temporada/site-específica da mesma série,
+  // sobe um nível e usa a raiz canônica.
+  if (normalizeAscii(sanitize(stripSeasonSuffix(baseName))) === normalizedExpected) {
+    return join(dirname(trimmed), expectedSeriesDir);
   }
 
   // Pasta de série sem ano e o título normalizado contém o nome da pasta
@@ -408,12 +320,12 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
     const providedSeasonNumber = asFiniteNumber(seasonNumber, 0);
     const seasonNumberValue = providedSeasonNumber > 0
       ? providedSeasonNumber
-      : inferSeasonNumber(
+      : inferSeasonInfo(
           titleValue,
           titleEnglishValue,
           titleRomajiValue,
           altTitleValue,
-        );
+        ).seasonNumber;
 
     let existing = null as { id: string } | null;
     if (sourceUrlValue) {
@@ -529,7 +441,7 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
 
       logger.info("library", `reused existing "${titleValue}" (id=${existing.id})`);
       // Resolve series_title via AniList em background (não bloqueia resposta)
-      void resolveAndStoreSeriesTitle(existing.id, anilistIdValue, titleEnglishValue ?? titleValue);
+      void resolveAndStoreSeriesTitle(existing.id, anilistIdValue, titleRomajiValue ?? titleValue);
       return { ok: true, id: existing.id, reused: true };
     }
 
@@ -573,7 +485,7 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
     `, values);
     logger.info("library", `added "${titleValue}" (id=${id})`);
     // Resolve series_title via AniList em background (não bloqueia resposta)
-    void resolveAndStoreSeriesTitle(id, anilistIdValue, titleEnglishValue ?? titleValue);
+    void resolveAndStoreSeriesTitle(id, anilistIdValue, titleRomajiValue ?? titleValue);
     return { ok: true, id };
   })
 

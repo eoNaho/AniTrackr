@@ -13,8 +13,9 @@ import { writeFileSync, mkdirSync, existsSync, statSync, readdirSync } from "fs"
 import { join, dirname, basename } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
-import { seriesDir, seasonDir, stripSeasonSuffix, sanitize } from "./naming.ts";
+import { inferSeasonInfo, isSeasonDirectoryName, seasonDir, stripSeasonSuffix, sanitize } from "./naming.ts";
 import { jikanGetEpisode } from "./jikan.ts";
+import { scanAnime } from "./scanner.ts";
 
 function getConfigValue(key: string): string {
   return db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key)?.value ?? "";
@@ -67,6 +68,7 @@ function normalizeAscii(value: string): string {
 type SeriesPathInput = {
   title: string;
   title_english: string | null;
+  title_romaji?: string | null;
   year: number | null;
   local_path: string;
   series_title?: string | null;
@@ -80,7 +82,7 @@ function resolveSeriesRootPath(anime: SeriesPathInput): string {
 
   // series_title tem o nome base da série resolvido via AniList (ex: "Fire Force").
   // Garante que o NFO vá para a mesma pasta que o downloader usa.
-  const rawTitle = anime.series_title || (anime.title_english ?? anime.title);
+  const rawTitle = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
   const baseTitle = stripSeasonSuffix(rawTitle);
   const expectedSeriesName = sanitize(baseTitle);
 
@@ -91,18 +93,31 @@ function resolveSeriesRootPath(anime: SeriesPathInput): string {
 
   let withoutTrailing = rawPath.replace(/[\\/]+$/, "");
 
-  // Sobe todos os níveis de "Season XX"
-  while (/^season\s+\d{1,3}$/i.test(basename(withoutTrailing))) {
+  // Sobe todos os níveis de "Season XX" / "Season XX Part YY"
+  while (isSeasonDirectoryName(basename(withoutTrailing))) {
     const parent = dirname(withoutTrailing);
     if (parent === withoutTrailing) break;
     withoutTrailing = parent;
   }
 
   const baseName = basename(withoutTrailing);
+  const normalizedExpected = normalizeAscii(expectedSeriesName);
+  const strippedBaseName = sanitize(stripSeasonSuffix(baseName));
+  const normalizedStrippedBase = normalizeAscii(strippedBaseName);
 
   // Correspondência exata com o nome esperado (sem ano)
-  if (normalizeAscii(baseName) === normalizeAscii(expectedSeriesName)) {
+  if (normalizeAscii(baseName) === normalizedExpected) {
     return withoutTrailing;
+  }
+
+  // Pasta do provider ainda traz o sufixo da temporada/part. Volta para a base
+  // e reaplica o nome canônico da série em vez de criar "<errada>/<certa>".
+  if (normalizedStrippedBase === normalizedExpected) {
+    const parent = dirname(withoutTrailing);
+    if (parent !== withoutTrailing) {
+      return join(parent, expectedSeriesName);
+    }
+    return join(baseDir, expectedSeriesName);
   }
 
   // Pasta já tem formato "Título (Ano)" — é a pasta da série, não duplica
@@ -110,7 +125,9 @@ function resolveSeriesRootPath(anime: SeriesPathInput): string {
     return withoutTrailing;
   }
 
-  // local_path aponta para uma pasta base genérica → adiciona pasta da série
+  // local_path aponta para uma pasta base genérica → adiciona pasta da série.
+  // Casos claramente errados já foram corrigidos acima; aqui preservamos paths
+  // explícitos do usuário em vez de forçar uma migração silenciosa.
   return join(withoutTrailing, expectedSeriesName);
 }
 
@@ -126,9 +143,15 @@ function resolveEpisodeNfoPath(videoPath: string, episodeNumber: number, season:
         return join(videoPath, mediaFiles[0].replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo"));
       }
 
-      const seasonPath = join(videoPath, seasonDir(season));
-      if (existsSync(seasonPath) && statSync(seasonPath).isDirectory()) {
-        return join(seasonPath, `episode-${String(episodeNumber).padStart(2, "0")}.nfo`);
+      const seasonFolder = readdirSync(videoPath).find((entry) => {
+        if (!isSeasonDirectoryName(entry)) return false;
+        return new RegExp(`^season\\s+0*${season}(?:\\s+part\\s+\\d+)?$`, "i").test(entry.trim());
+      });
+      if (seasonFolder) {
+        const seasonPath = join(videoPath, seasonFolder);
+        if (existsSync(seasonPath) && statSync(seasonPath).isDirectory()) {
+          return join(seasonPath, `episode-${String(episodeNumber).padStart(2, "0")}.nfo`);
+        }
       }
 
       return join(videoPath, `episode-${String(episodeNumber).padStart(2, "0")}.nfo`);
@@ -210,10 +233,19 @@ export interface NfoResult {
   errors: string[];
 }
 
+function getEpisodeRowsWithFiles(animeId: string): EpisodeRow[] {
+  return db.query<EpisodeRow, [string]>(
+    `SELECT number, season, title, synopsis, aired, duration_min, file_path
+     FROM episodes WHERE anime_id = ? AND file_path IS NOT NULL AND file_path != ''
+     ORDER BY season, number`
+  ).all(animeId);
+}
+
 /** Gera todos os NFOs e baixa imagens para um anime */
 export async function generateNfo(animeId: string, downloadImages = true): Promise<NfoResult> {
   const anime = db.query<AnimeRow, [string]>(`SELECT * FROM animes WHERE id = ?`).get(animeId);
   if (!anime) throw new Error(`Anime ${animeId} não encontrado`);
+  const seasonInfo = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji);
 
   const result: NfoResult = {
     animeId,
@@ -253,11 +285,15 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
   }
 
   // Episode NFOs
-  const episodes = db.query<EpisodeRow, [string]>(
-    `SELECT number, season, title, synopsis, aired, duration_min, file_path
-     FROM episodes WHERE anime_id = ? AND file_path IS NOT NULL AND file_path != ''
-     ORDER BY season, number`
-  ).all(animeId);
+  let episodes = getEpisodeRowsWithFiles(animeId);
+  if (episodes.length === 0 && anime.local_path?.trim()) {
+    try {
+      await scanAnime(animeId);
+      episodes = getEpisodeRowsWithFiles(animeId);
+    } catch (err) {
+      result.errors.push(`scan_before_nfo: ${String(err)}`);
+    }
+  }
 
   const title = anime.title_english ?? anime.title;
 
@@ -277,11 +313,15 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
     }
   }
 
+  if (episodes.length === 0) {
+    result.errors.push("Nenhum episódio com file_path foi encontrado para gerar episode.nfo.");
+  }
+
   // Gera também season poster para cada temporada existente
   if (downloadImages && anime.poster_url) {
     const seasons = [...new Set(episodes.map((e) => e.season))];
     for (const s of seasons) {
-      const seasonPath = join(serPath, seasonDir(s));
+      const seasonPath = join(serPath, seasonDir(s, seasonInfo.seasonPart));
       mkdirSync(seasonPath, { recursive: true });
       const seasonPoster = join(seasonPath, "poster.jpg");
       if (!existsSync(seasonPoster)) {
@@ -294,20 +334,22 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
 }
 
 /** Gera NFOs para todos os animes da biblioteca */
-export async function generateNfoAll(downloadImages = false): Promise<{ total: number; done: number; errors: number }> {
+export async function generateNfoAll(downloadImages = false): Promise<{ total: number; done: number; errors: number; episodesNfoTotal: number }> {
   const animes = db.query<{ id: string }, []>(`SELECT id FROM animes WHERE is_tracked = 1`).all();
   let done = 0;
   let errors = 0;
+  let episodesNfoTotal = 0;
   for (const { id } of animes) {
     try {
-      await generateNfo(id, downloadImages);
+      const result = await generateNfo(id, downloadImages);
       done++;
+      episodesNfoTotal += result.episodesNfo;
     } catch (err) {
       logger.warn("jellyfin", `generateNfo(${id}) failed: ${err}`);
       errors++;
     }
   }
-  return { total: animes.length, done, errors };
+  return { total: animes.length, done, errors, episodesNfoTotal };
 }
 
 /**
@@ -324,6 +366,7 @@ export async function generateSingleEpisodeNfoAsync(
   try {
     const anime = db.query<AnimeRow, [string]>(`SELECT * FROM animes WHERE id = ?`).get(animeId);
     if (!anime) return;
+    const seasonInfo = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji);
 
     // 1. Carrega episódio do banco
     let ep = db.query<EpisodeRow, [string, number, number]>(
@@ -390,6 +433,13 @@ export async function generateSingleEpisodeNfoAsync(
     if (anime.cover_url && !existsSync(join(serPath, "fanart.jpg"))) {
       void downloadImage(anime.cover_url, join(serPath, "fanart.jpg"));
     }
+    if (anime.poster_url) {
+      const seasonPosterPath = join(serPath, seasonDir(season, seasonInfo.seasonPart), "poster.jpg");
+      if (!existsSync(seasonPosterPath)) {
+        mkdirSync(dirname(seasonPosterPath), { recursive: true });
+        void downloadImage(anime.poster_url, seasonPosterPath);
+      }
+    }
   } catch (err) {
     logger.error("jellyfin", `generateSingleEpisodeNfoAsync(${animeId}, ep${episodeNumber}) falhou: ${err}`);
   }
@@ -397,14 +447,15 @@ export async function generateSingleEpisodeNfoAsync(
 
 /** Baixa poster e fanart para um anime sem gerar NFO */
 export async function downloadPosters(animeId: string): Promise<{ poster: boolean; fanart: boolean }> {
-  const anime = db.query<{ poster_url: string | null; cover_url: string | null; local_path: string; title: string; title_english: string | null; year: number | null }, [string]>(
-    `SELECT poster_url, cover_url, local_path, title, title_english, year FROM animes WHERE id = ?`
+  const anime = db.query<{ poster_url: string | null; cover_url: string | null; local_path: string; title: string; title_english: string | null; title_romaji: string | null; year: number | null }, [string]>(
+    `SELECT poster_url, cover_url, local_path, title, title_english, title_romaji, year FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) throw new Error(`Anime ${animeId} não encontrado`);
 
   const serPath = resolveSeriesRootPath({
     title: anime.title,
     title_english: anime.title_english,
+    title_romaji: anime.title_romaji,
     year: anime.year,
     local_path: anime.local_path,
   });

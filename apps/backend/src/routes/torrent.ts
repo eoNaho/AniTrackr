@@ -4,6 +4,8 @@
 
 import { Elysia, t } from "elysia";
 import { randomUUID } from "crypto";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "fs";
+import { dirname, extname, resolve } from "path";
 import { searchNyaa } from "../services/nyaa.ts";
 import { searchAniRena } from "../services/anirena.ts";
 import {
@@ -13,7 +15,9 @@ import {
 } from "../services/qbittorrent.ts";
 import { getAllHealth, resetProvider } from "../services/circuit-breaker.ts";
 import { generateSingleEpisodeNfoAsync } from "../services/jellyfin.ts";
+import { buildPath, inferSeasonInfo } from "../services/naming.ts";
 import db from "../db/index.ts";
+import { listFiles } from "../services/scanner.ts";
 import { logger } from "../utils/logger.ts";
 
 function getConfig(key: string): string {
@@ -24,6 +28,91 @@ function getConfig(key: string): string {
 const monitoredHashes = new Map<string, { jobId: string; animeId: string; episode: number; season: number }>();
 
 let _monitorInterval: ReturnType<typeof setInterval> | null = null;
+
+function normalizePathForCompare(pathValue: string): string {
+  return resolve(pathValue).replace(/[\\/]+/g, "\\").toLowerCase();
+}
+
+function cleanupEmptyParents(startDir: string, stopDir: string) {
+  let current = startDir;
+  const normalizedStop = normalizePathForCompare(stopDir);
+
+  while (current && normalizePathForCompare(current).startsWith(normalizedStop)) {
+    if (!existsSync(current) || !statSync(current).isDirectory()) break;
+
+    try {
+      if (readdirSync(current).length > 0) break;
+      rmSync(current, { recursive: false, force: true });
+    } catch {
+      break;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+}
+
+function normalizeCompletedTorrentPath(animeId: string, episode: number, season: number, rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (!trimmed || !existsSync(trimmed)) return rawPath;
+
+  const anime = db.query<{
+    title: string;
+    title_english: string | null;
+    title_romaji: string | null;
+    year: number | null;
+    series_title: string | null;
+  }, [string]>(
+    `SELECT title, title_english, title_romaji, year, series_title FROM animes WHERE id = ?`
+  ).get(animeId);
+  if (!anime) return rawPath;
+
+  let sourceMediaPath = trimmed;
+  if (statSync(trimmed).isDirectory()) {
+    const mediaFiles = listFiles(trimmed).sort((a, b) => b.sizeMb - a.sizeMb);
+    sourceMediaPath = mediaFiles[0]?.path ?? trimmed;
+  }
+
+  if (!/\.(mkv|mp4|avi|mov|m4v|webm)$/i.test(sourceMediaPath)) {
+    return rawPath;
+  }
+
+  const basePath = getConfig("qbittorrent_save_path") || getConfig("download_path");
+  if (!basePath.trim()) return sourceMediaPath;
+
+  const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
+  const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
+  const seasonPart = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji).seasonPart;
+  const ext = extname(sourceMediaPath).replace(/^\./, "") || "mkv";
+  const targetPath = buildPath(scheme, basePath, title, anime.year, season, episode, null, ext, seasonPart);
+
+  if (normalizePathForCompare(sourceMediaPath) === normalizePathForCompare(targetPath)) {
+    return sourceMediaPath;
+  }
+
+  try {
+    mkdirSync(dirname(targetPath), { recursive: true });
+    renameSync(sourceMediaPath, targetPath);
+
+    const sourceDir = dirname(sourceMediaPath);
+    const stopDir = statSync(trimmed).isDirectory() ? trimmed : sourceDir;
+    cleanupEmptyParents(sourceDir, stopDir);
+
+    logger.info("torrent-monitor", JSON.stringify({
+      event: "normalized_completed_path",
+      animeId,
+      episode,
+      from: sourceMediaPath,
+      to: targetPath,
+    }));
+
+    return targetPath;
+  } catch (err) {
+    logger.warn("torrent-monitor", `normalizeCompletedTorrentPath falhou: ${String(err)}`);
+    return sourceMediaPath;
+  }
+}
 
 export function startTorrentMonitor() {
   if (_monitorInterval) clearInterval(_monitorInterval);
@@ -41,7 +130,10 @@ export function startTorrentMonitor() {
       const speedKbps = Math.round(torrent.dlspeed / 1024);
       const downloadedBytes = torrent.downloaded ?? 0;
       const totalBytes = torrent.size ?? 0;
-      const filePath = torrent.content_path ?? torrent.save_path ?? "";
+      const rawFilePath = torrent.content_path ?? torrent.save_path ?? "";
+      const filePath = status === "completed"
+        ? normalizeCompletedTorrentPath(meta.animeId, meta.episode, meta.season, rawFilePath)
+        : rawFilePath;
 
       if (status === "completed") {
         db.run(
