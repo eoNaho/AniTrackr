@@ -321,6 +321,12 @@ async function resolveAnimefireEpisodeSource(episodeUrl: string): Promise<string
     if (!pageResponse.ok) return null;
 
     const pageHtml = await pageResponse.text();
+    
+    const direct = extractDirectVideoFromHtml(pageHtml);
+    if (direct) {
+      return direct;
+    }
+
     const endpointRaw = pageHtml.match(/data-video-src="([^"]+)"/i)?.[1] ?? "";
     const endpoint = normalizeEscapedUrl(endpointRaw.replace(/&amp;/g, "&"));
     if (!endpoint || !isHttpUrl(endpoint)) return null;
@@ -432,6 +438,13 @@ export async function resolveDownloadSourceUrl(sourceUrl: string): Promise<strin
     if (host.endsWith("animefire.io") || host.endsWith("animefire.plus")) {
       const fromAnimefire = await resolveAnimefireEpisodeSource(sourceUrl);
       if (fromAnimefire && isHttpUrl(fromAnimefire)) {
+        if (fromAnimefire.includes("blogger.com/video.g?token=")) {
+          const fromBlogger = await resolveBloggerGoogleVideoUrl(fromAnimefire, sourceUrl);
+          if (fromBlogger && isHttpUrl(fromBlogger)) {
+            logger.info("source-resolver", `animefire->blogger->googlevideo resolved`);
+            return fromBlogger;
+          }
+        }
         logger.info("source-resolver", "animefire->direct-mp4 resolved");
         return fromAnimefire;
       }

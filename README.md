@@ -134,3 +134,7 @@ image/       # screenshots usadas neste README
 - Busca sem resultados: troque `source` para `all` e confira status dos providers em `/api/providers/health`.
 - Download falhando: confirme `yt-dlp`, `ffmpeg` e permissao em `download_path`.
 - Torrent sem progresso: teste credenciais/host do qBittorrent em `/api/torrent/status`.
+
+## Licença
+
+Este projeto está licenciado sob a [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE). Veja o arquivo "LICENSE" para mais detalhes.

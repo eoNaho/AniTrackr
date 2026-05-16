@@ -924,7 +924,8 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
         } catch {
           // ignore
         }
-        db.run(`UPDATE downloads SET source_url = ? WHERE id = ?`, [resolved, jobId]);
+        // Não persiste a URL resolvida — mantém a URL original da página no DB
+        // para que retries possam re-resolver e obter uma URL de CDN fresca
       }
     } catch (err) {
       logger.warn(
@@ -948,8 +949,7 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
       if (sourceHost.endsWith("goyabu.io")) {
         const shouldTryAnimefire =
           effectiveHost.endsWith("goyabu.io") ||
-          effectiveHost.endsWith("blogger.com") ||
-          effectiveHost.endsWith("googlevideo.com");
+          effectiveHost.endsWith("blogger.com");
 
         if (shouldTryAnimefire) {
           const animefireFallback = await resolveAnimefireFallbackSource(animeId, episode, season);
@@ -978,7 +978,7 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
             );
 
             effectiveSourceUrl = fallbackResolved;
-            db.run(`UPDATE downloads SET source_url = ?, provider = ? WHERE id = ?`, [fallbackResolved, "animefire", jobId]);
+            db.run(`UPDATE downloads SET source_url = ?, provider = ? WHERE id = ?`, [animefireFallback, "animefire", jobId]);
           }
         }
       }
