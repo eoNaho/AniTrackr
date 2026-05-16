@@ -5,6 +5,7 @@
   "workspaces": [
     "apps/*"
   ],
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "concurrently -k -n web,backend -c cyan,green \"bun run dev:web\" \"bun run dev:backend\"",
     "dev:web": "bun run --filter @anitrackr/web dev",
