@@ -1,5 +1,7 @@
 # AniTrackr
 
+![AniTrackr](image/capa.png)
+
 Painel local para buscar, baixar e rastrear episodios de anime com frontend em Next.js e backend em Elysia.
 
 ## Screenshots
@@ -53,10 +55,23 @@ bun run docker:up
 bun run docker:logs
 ```
 
+Servicos da stack Docker:
+
+- Web: `http://localhost:3000`
+- API: `http://localhost:3001`
+- qBittorrent WebUI: `http://localhost:8080`
+
 Volumes persistentes:
 
 - `anitrackr_data` -> banco SQLite
 - `anitrackr_downloads` -> arquivos baixados
+- `anitrackr_qbt_config` -> config do qBittorrent
+
+Nota para torrents no Docker:
+
+- O backend passa a usar `http://qbittorrent:8080` internamente.
+- No navegador/host, a WebUI fica em `http://localhost:8080`.
+- No primeiro boot do container do qBittorrent, confira `docker compose logs qbittorrent` para obter a senha temporaria do WebUI e depois ajuste as credenciais no app se necessario.
 
 ## Fluxo de uso
 
@@ -111,11 +126,12 @@ Exemplo:
 
 ```json
 {
-  "download_path": "D:/Anime",
+  "download_path": "/downloads",
   "quality": "1080p",
   "sub_lang": "pt-BR",
   "allow_simulated_downloads": "false",
-  "default_search_source": "all"
+  "default_search_source": "all",
+  "qbittorrent_host": "http://qbittorrent:8080"
 }
 ```
 
