@@ -75,8 +75,8 @@ type SeriesPathInput = {
 };
 
 function resolveSeriesRootPath(anime: SeriesPathInput): string {
-  // Usa o mesmo download_path do config que o downloader usa — evita NFO em pasta errada
-  const configDownloadPath = getConfigValue("download_path");
+  // Usa media_path (destino final organizado) para que o NFO vá para a mesma pasta que o downloader
+  const configDownloadPath = getConfigValue("media_path") || getConfigValue("download_path");
   const systemFallback = join(process.env.USERPROFILE ?? process.env.HOME ?? "~", "Anime");
   const baseDir = configDownloadPath || systemFallback;
 

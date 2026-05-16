@@ -621,7 +621,7 @@ function simulateDownload(jobId: string, animeId: string, episode: number, seaso
   ).get(animeId);
   if (!anime) return;
 
-  const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
+  const basePath = getConfig("media_path") || getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
   // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
   const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
@@ -689,7 +689,7 @@ async function realDownload(
 ) {
   const ytdlp = getConfig("yt_dlp_path") || "yt-dlp";
   const ffmpegPath = getConfig("ffmpeg_path");
-  const basePath = getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
+  const basePath = getConfig("media_path") || getConfig("download_path") || `${process.env.USERPROFILE ?? "~"}/Anime`;
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";
   const quality = getConfig("quality") || "1080p";
   const formatSelector = buildYtDlpFormatSelector(quality);

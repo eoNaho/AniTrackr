@@ -85,7 +85,7 @@ function normalizeCompletedTorrentPath(animeId: string, episode: number, season:
     return rawPath;
   }
 
-  const basePath = getConfig("qbittorrent_save_path") || getConfig("download_path");
+  const basePath = getConfig("media_path") || getConfig("download_path");
   if (!basePath.trim()) return sourceMediaPath;
 
   const scheme = (getConfig("naming_scheme") || "jellyfin") as "jellyfin" | "plex" | "simple";

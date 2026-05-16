@@ -8,7 +8,7 @@ const SENSITIVE_KEYS = new Set(["qbittorrent_password"]);
 const MASK = "***";
 
 const ALLOWED_KEYS = new Set([
-  "download_path", "quality", "provider",
+  "download_path", "media_path", "quality", "provider",
   "max_concurrent", "language", "naming_scheme",
   "yt_dlp_path", "ffmpeg_path", "prefer_sub",
   "allow_simulated_downloads",

@@ -6,6 +6,7 @@ const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
 const isDockerRuntime = process.env.ANITRACKR_RUNTIME?.trim() === "docker" || existsSync("/.dockerenv");
 const dataRoot = process.env.ANITRACKR_DATA_DIR?.trim() || home;
 const defaultDownloadPath = process.env.ANITRACKR_DOWNLOAD_PATH?.trim() || join(home, "Anime");
+const defaultMediaPath = process.env.ANITRACKR_MEDIA_PATH?.trim() || "";
 const defaultQbHost = process.env.ANITRACKR_QBITTORRENT_HOST?.trim()
   || (isDockerRuntime ? "http://qbittorrent:8080" : "http://localhost:8080");
 const defaultQbEnabled = process.env.ANITRACKR_QBITTORRENT_ENABLED?.trim() || "false";
@@ -190,6 +191,7 @@ db.run(`
 // ── default config ─────────────────────────────────────────────────────────
 const defaultConfig: Record<string, string> = {
   download_path:    defaultDownloadPath,
+  media_path:       defaultMediaPath,
   quality:          "1080p",
   provider:         "animefire",
   max_concurrent:   "3",
@@ -225,6 +227,9 @@ if (isDockerRuntime) {
   syncConfigDefault("qbittorrent_host", defaultQbHost, ["http://localhost:8080"]);
   if (defaultQbSavePath) {
     syncConfigDefault("qbittorrent_save_path", defaultQbSavePath, [""]);
+  }
+  if (defaultMediaPath) {
+    syncConfigDefault("media_path", defaultMediaPath, [""]);
   }
 }
 

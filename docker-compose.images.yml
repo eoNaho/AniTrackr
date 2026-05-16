@@ -8,11 +8,13 @@ services:
       PORT: "3001"
       ANITRACKR_DATA_DIR: /data
       ANITRACKR_DOWNLOAD_PATH: /downloads
+      ANITRACKR_MEDIA_PATH: /media/anime
       ANITRACKR_QBITTORRENT_HOST: http://qbittorrent:8080
       ANITRACKR_QBITTORRENT_SAVE_PATH: /downloads
     volumes:
       - anitrackr_data:/data
       - anitrackr_downloads:/downloads
+      - anitrackr_media:/media/anime
     ports:
       - "3001:3001"
     healthcheck:
@@ -56,4 +58,5 @@ services:
 volumes:
   anitrackr_data:
   anitrackr_downloads:
+  anitrackr_media:
   anitrackr_qbt_config:

@@ -10,15 +10,19 @@ services:
       PORT: "3001"
       ANITRACKR_DATA_DIR: /data
       ANITRACKR_DOWNLOAD_PATH: /downloads
+      ANITRACKR_MEDIA_PATH: /media/anime
       ANITRACKR_QBITTORRENT_HOST: http://qbittorrent:8080
       ANITRACKR_QBITTORRENT_SAVE_PATH: /downloads
     volumes:
       - type: bind
-        source: ${APP_DATA_DIR:-./casaos-appdata}/backend-data
+        source: /DATA/AppData/anitrackr
         target: /data
       - type: bind
-        source: ${APP_DATA_DIR:-./casaos-appdata}/downloads
+        source: /DATA/Downloads
         target: /downloads
+      - type: bind
+        source: /DATA/Media/Anime
+        target: /media/anime
     ports:
       - "3001:3001"
     networks:
@@ -44,10 +48,10 @@ services:
       TORRENTING_PORT: "6881"
     volumes:
       - type: bind
-        source: ${APP_DATA_DIR:-./casaos-appdata}/qbittorrent-config
+        source: /DATA/AppData/anitrackr-qbittorrent
         target: /config
       - type: bind
-        source: ${APP_DATA_DIR:-./casaos-appdata}/downloads
+        source: /DATA/Downloads
         target: /downloads
     ports:
       - "8080:8080"
