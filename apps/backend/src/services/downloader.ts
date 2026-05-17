@@ -227,6 +227,9 @@ async function resolveAllAnimeFallbackSource(animeId: string, episode: number, s
 const active = new Map<string, ActiveHandle>();
 const scheduledStarts = new Map<string, ReturnType<typeof setTimeout>>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// Tracks jobs that passed the guards in startDownload but haven't entered active yet
+// (during the async setup window: ensureSeriesTitle + resolveDownloadSourceUrl)
+const pendingStarts = new Set<string>();
 
 function getConfig(key: string): string {
   const row = db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key);
@@ -306,7 +309,7 @@ function kickQueue(delayMs = 100) {
   let scheduled = 0;
   for (const row of rows) {
     if (scheduled >= available) break;
-    if (active.has(row.id) || scheduledStarts.has(row.id) || retryTimers.has(row.id)) continue;
+    if (active.has(row.id) || scheduledStarts.has(row.id) || retryTimers.has(row.id) || pendingStarts.has(row.id)) continue;
 
     scheduleStart(row.id, row.anime_id, row.episode_number, row.season, row.source_url, delayMs + scheduled * 75);
     scheduled += 1;
@@ -516,6 +519,9 @@ function scheduleAutoRetry(jobId: string, reason: string, errorCode: string): bo
   if (!job) return false;
   if (job.status === "cancelled") return false;
 
+  // Guard against duplicate retries caused by the double-start race condition
+  if (retryTimers.has(jobId)) return true;
+
   const configuredMaxAttempts = getConfigInt("retry_max_attempts", 3, 0, 20);
   const configuredBaseDelay = getConfigInt("retry_base_delay_seconds", 20, 1, 3600);
   const configuredMaxDelay = getConfigInt("retry_max_delay_seconds", 900, 1, 24 * 3600);
@@ -534,7 +540,9 @@ function scheduleAutoRetry(jobId: string, reason: string, errorCode: string): bo
          next_retry_at = datetime('now', ?),
          error_msg = ?,
          last_error_code = ?,
-         speed_kbps = 0
+         speed_kbps = 0,
+         progress = 0,
+         downloaded_bytes = 0
      WHERE id = ?`,
     [nextAttempt, maxAttempts, `+${delaySeconds} seconds`, reason.slice(0, 500), errorCode.slice(0, 120), jobId]
   );
@@ -903,6 +911,13 @@ async function realDownload(
     return;
   }
 
+  if (errText) {
+    logger.warn(
+      "downloader",
+      JSON.stringify({ event: "yt_dlp_stderr", jobId, episode, stderr: errText.slice(0, 400) })
+    );
+  }
+
   handleJobFailure(
     jobId,
     animeId,
@@ -967,6 +982,11 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
     scheduleStart(jobId, animeId, episode, season, sourceUrl, 500);
     return;
   }
+
+  // Guard against the double-start race: between scheduledStarts timer firing and
+  // active.set() being called in realDownload, kickQueue can re-schedule this job.
+  if (pendingStarts.has(jobId)) return;
+  pendingStarts.add(jobId);
 
   // Resolve series_title antes de construir o caminho — garante pasta correta da série
   await ensureSeriesTitle(animeId);
@@ -1061,6 +1081,10 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
       // keep original source resolution result
     }
   }
+
+  // Remove from pendingStarts before handing off to the actual download functions,
+  // which manage the active map themselves.
+  pendingStarts.delete(jobId);
 
   if (!effectiveSourceUrl) {
     if (isSimulationAllowed()) {
