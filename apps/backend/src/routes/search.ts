@@ -5,6 +5,11 @@ import { searchAllProviders, getEpisodesWithFallback, getProviderInfo, type Prov
 import { searchKitsu } from "../services/kitsu.ts";
 import { searchNyaa } from "../services/nyaa.ts";
 import { logger } from "../utils/logger.ts";
+import db from "../db/index.ts";
+
+function isQbtEnabled(): boolean {
+  return db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get("qbittorrent_enabled")?.value === "true";
+}
 
 export const searchRoutes = new Elysia({ prefix: "/search" })
 
@@ -91,10 +96,32 @@ export const searchRoutes = new Elysia({ prefix: "/search" })
       }
     }
 
-    // "all" — todos os providers em paralelo
+    // "all" — todos os providers de streaming em paralelo
     const { results, providerStats } = await searchAllProviders(q, [
       "animefire", "goyabu", "allanime", "nineanime", "animedrive", "superflix", "dattebayo",
     ]);
+
+    // Inclui Nyaa.si quando qBittorrent está habilitado
+    if (isQbtEnabled()) {
+      try {
+        const nyaaResults = await searchNyaa(q, { limit: 10 });
+        const nyaaMapped = nyaaResults.map((r) => ({
+          id: r.id,
+          title: `${r.title}${r.seeders > 0 ? ` [${r.seeders}S]` : ""}${r.size ? ` · ${r.size}` : ""}`,
+          url: r.magnetLink,
+          provider: "nyaa",
+        }));
+        return {
+          source: "all",
+          total: results.length + nyaaMapped.length,
+          results: [...results, ...nyaaMapped],
+          providerStats: { ...providerStats, nyaa: { count: nyaaMapped.length, status: "ok" as const } },
+        };
+      } catch {
+        // Nyaa falhou — retorna só os resultados de streaming
+      }
+    }
+
     return { source: "all", total: results.length, results, providerStats };
   }, {
     query: t.Object({

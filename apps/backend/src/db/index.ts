@@ -231,6 +231,13 @@ if (isDockerRuntime) {
   if (defaultMediaPath) {
     syncConfigDefault("media_path", defaultMediaPath, [""]);
   }
+  // INSERT OR IGNORE não atualiza valores já existentes, então se o usuário
+  // mudou ANITRACKR_QBITTORRENT_ENABLED no compose e reiniciou, o DB ficaria
+  // com o valor antigo. Aqui garantimos que env="true" sempre prevalece.
+  // Env="false" não sobrescreve "true" para preservar configuração feita pela UI.
+  if (defaultQbEnabled === "true") {
+    db.run(`UPDATE config SET value = 'true' WHERE key = 'qbittorrent_enabled'`);
+  }
 }
 
 export default db;
