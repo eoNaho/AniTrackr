@@ -5,7 +5,9 @@ import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { buildPath, inferSeasonInfo, stripSeasonSuffix } from "./naming.ts";
 import { getAllAnimeStreamUrl, searchAllAnime } from "./allanime.ts";
-import { animefireEpisodes, animefireSearch } from "./scraper.ts";
+import { animefireEpisodes, animefireSearch, goyabuSearch, goyabuEpisodes } from "./scraper.ts";
+import { animeDriveSearch, animeDriveEpisodes, animeDriveStreamUrl } from "./animedrive.ts";
+import { dattebayoSearch, dattebayoEpisodes, dattebayoStreamUrl } from "./dattebayo.ts";
 import { resolveDownloadSourceUrl } from "./source-resolver.ts";
 import { generateSingleEpisodeNfoAsync } from "./jellyfin.ts";
 import { getAniListAnime, resolveSeriesRootTitle } from "./anilist.ts";
@@ -186,6 +188,90 @@ async function resolveAnimefireFallbackSource(animeId: string, episode: number, 
         // Try next candidate.
       }
     }
+  }
+
+  return null;
+}
+
+async function resolvePtBrFallbackSource(
+  animeId: string,
+  episode: number,
+  _season: number,
+  excludeSourceUrl: string | null
+): Promise<string | null> {
+  const anime = db.query<{ title: string; title_english: string | null; source_url: string | null }, [string]>(
+    `SELECT title, title_english, source_url FROM animes WHERE id = ?`
+  ).get(animeId);
+  if (!anime) return null;
+
+  const legacyQueryCandidates = [anime.title, anime.title_english ?? ""]
+    .map((q) => q.trim())
+    .filter((q) => q.length > 0)
+    .map((q) => sanitizeSearchQuery(q));
+  const queryCandidates = buildSearchQueryCandidates(
+    extractQueryFromSourceUrl(anime.source_url),
+    ...legacyQueryCandidates
+  );
+
+  const excludeHost = (() => { try { return new URL(excludeSourceUrl ?? "").hostname.toLowerCase(); } catch { return ""; } })();
+
+  // Try Goyabu (skip if that was the failing provider)
+  if (!excludeHost.endsWith("goyabu.io")) {
+    for (const query of queryCandidates) {
+      try {
+        const hits = await goyabuSearch(query);
+        for (const hit of hits.slice(0, 4)) {
+          try {
+            const eps = await goyabuEpisodes(hit.url);
+            const match = eps.find((ep) => ep.number === episode);
+            if (match?.url) {
+              logger.info("downloader", JSON.stringify({ event: "ptbr_fallback_resolved", provider: "goyabu", animeId, episode }));
+              return match.url;
+            }
+          } catch { /* try next */ }
+        }
+      } catch { continue; }
+    }
+  }
+
+  // Try AnimeDrive
+  for (const query of queryCandidates) {
+    try {
+      const hits = await animeDriveSearch(query);
+      for (const hit of hits.slice(0, 4)) {
+        try {
+          const eps = await animeDriveEpisodes(hit.url);
+          const match = eps.find((ep) => ep.number === episode);
+          if (match?.url) {
+            const stream = await animeDriveStreamUrl(match.url);
+            if (stream?.url && stream.type !== "iframe") {
+              logger.info("downloader", JSON.stringify({ event: "ptbr_fallback_resolved", provider: "animedrive", animeId, episode }));
+              return stream.url;
+            }
+          }
+        } catch { /* try next */ }
+      }
+    } catch { continue; }
+  }
+
+  // Try Dattebayo
+  for (const query of queryCandidates) {
+    try {
+      const hits = await dattebayoSearch(query);
+      for (const hit of hits.slice(0, 4)) {
+        try {
+          const eps = await dattebayoEpisodes(hit.url);
+          const match = eps.find((ep) => ep.number === episode);
+          if (match?.url) {
+            const stream = await dattebayoStreamUrl(match.url);
+            if (stream?.url) {
+              logger.info("downloader", JSON.stringify({ event: "ptbr_fallback_resolved", provider: "dattebayo", animeId, episode }));
+              return stream.url;
+            }
+          }
+        } catch { /* try next */ }
+      }
+    } catch { continue; }
   }
 
   return null;
@@ -442,28 +528,11 @@ function isLowQualityGoogleVideoUrl(value: string): boolean {
   }
 }
 
-function shouldPreferAllAnimeFallback(sourceUrl: string | null, effectiveSourceUrl: string | null): string | null {
+function shouldPreferPtBrFallback(sourceUrl: string | null, effectiveSourceUrl: string | null): string | null {
   if (!effectiveSourceUrl) return null;
 
   if (isAnimefireEpisodePageUrl(effectiveSourceUrl)) {
     return "animefire_page_unresolved";
-  }
-
-  if (!sourceUrl) return null;
-
-  try {
-    const sourceHost = new URL(sourceUrl).hostname.toLowerCase();
-    const cameFromFragileProvider =
-      sourceHost.endsWith("animefire.io") ||
-      sourceHost.endsWith("animefire.plus") ||
-      sourceHost.endsWith("goyabu.io") ||
-      sourceHost.endsWith("blogger.com");
-
-    if (cameFromFragileProvider && isLowQualityGoogleVideoUrl(effectiveSourceUrl)) {
-      return "low_quality_googlevideo_preferred_hls";
-    }
-  } catch {
-    return null;
   }
 
   return null;
@@ -553,21 +622,25 @@ function parseSizeToBytes(value: number, unit: string): number {
 
 function shouldTryAllAnimeRecovery(sourceUrl: string, errText: string): boolean {
   const err = errText.toLowerCase();
-  const isBloggerExtractorFailure = err.includes("blogger.com") && err.includes("unable to extract json data");
-  const isExpiredAllAnimeSource = err.includes("http error 404") || err.includes("forbidden");
-  if (!isBloggerExtractorFailure && !isExpiredAllAnimeSource) {
-    return false;
-  }
+  const isExpiredStream = err.includes("http error 404") || err.includes("forbidden");
+  if (!isExpiredStream) return false;
 
   try {
     const host = new URL(sourceUrl).hostname.toLowerCase();
+    return host.endsWith("wixmp.com") || host.endsWith("wixstatic.com");
+  } catch {
+    return false;
+  }
+}
+
+function isPtBrSourceUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
     return (
       host.endsWith("animefire.io") ||
       host.endsWith("animefire.plus") ||
       host.endsWith("goyabu.io") ||
-      host.endsWith("blogger.com") ||
-      host.endsWith("wixmp.com") ||
-      host.endsWith("wixstatic.com")
+      host.endsWith("blogger.com")
     );
   } catch {
     return false;
@@ -631,6 +704,57 @@ async function tryRecoverFromBloggerFailure(
   sourceUrl: string,
   errText: string
 ): Promise<boolean> {
+  const err = errText.toLowerCase();
+  const isBloggerExtractorFailure = err.includes("blogger.com") && err.includes("unable to extract json data");
+
+  // For PT-BR sources (AnimeFire, Goyabu, Blogger): try other PT-BR providers, never AllAnime
+  if (isBloggerExtractorFailure || isPtBrSourceUrl(sourceUrl)) {
+    if (!isBloggerExtractorFailure && !err.includes("http error 404") && !err.includes("forbidden")) {
+      return false;
+    }
+    const fallbackSource = await resolvePtBrFallbackSource(animeId, episode, season, sourceUrl);
+    if (!fallbackSource || fallbackSource === sourceUrl) return false;
+
+    db.run(
+      `UPDATE downloads
+       SET status = 'queued',
+           provider = 'ptbr_fallback',
+           source_url = ?,
+           progress = 0,
+           speed_kbps = 0,
+           total_bytes = 0,
+           downloaded_bytes = 0,
+           error_msg = NULL,
+           last_error_code = NULL,
+           next_retry_at = NULL
+       WHERE id = ?`,
+      [fallbackSource, jobId]
+    );
+    db.run(
+      `UPDATE episodes
+       SET status = 'queued', download_id = NULL
+       WHERE anime_id = ? AND number = ? AND season = ?`,
+      [animeId, episode, season]
+    );
+    updateAnimeDownloadState(animeId);
+    logger.warn(
+      "downloader",
+      JSON.stringify({
+        event: "provider_recovery_scheduled",
+        jobId,
+        animeId,
+        episode,
+        from: sourceUrl,
+        to: fallbackSource,
+        provider: "ptbr_fallback",
+        reason: isBloggerExtractorFailure ? "blogger_json_extract_failed" : "ptbr_source_expired",
+      })
+    );
+    scheduleStart(jobId, animeId, episode, season, fallbackSource, 200);
+    return true;
+  }
+
+  // For expired AllAnime streams (wixmp/wixstatic): refresh via AllAnime
   if (!shouldTryAllAnimeRecovery(sourceUrl, errText)) return false;
 
   const fallbackSource = await resolveAllAnimeFallbackSource(animeId, episode, season);
@@ -658,7 +782,6 @@ async function tryRecoverFromBloggerFailure(
     [animeId, episode, season]
   );
   updateAnimeDownloadState(animeId);
-
   logger.warn(
     "downloader",
     JSON.stringify({
@@ -669,10 +792,9 @@ async function tryRecoverFromBloggerFailure(
       from: sourceUrl,
       to: fallbackSource,
       provider: "allanime",
-      reason: "blogger_json_extract_failed",
+      reason: "allanime_stream_expired",
     })
   );
-
   scheduleStart(jobId, animeId, episode, season, fallbackSource, 200);
   return true;
 }
@@ -1327,10 +1449,10 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
     }
   }
 
-  const allanimeFallbackReason = shouldPreferAllAnimeFallback(sourceUrl, effectiveSourceUrl);
-  if (effectiveSourceUrl && allanimeFallbackReason) {
-    const allanimeFallback = await resolveAllAnimeFallbackSource(animeId, episode, season);
-    if (allanimeFallback && allanimeFallback !== effectiveSourceUrl) {
+  const ptBrFallbackReason = shouldPreferPtBrFallback(sourceUrl, effectiveSourceUrl);
+  if (effectiveSourceUrl && ptBrFallbackReason) {
+    const ptBrFallback = await resolvePtBrFallbackSource(animeId, episode, season, sourceUrl);
+    if (ptBrFallback && ptBrFallback !== effectiveSourceUrl) {
       logger.warn(
         "downloader",
         JSON.stringify({
@@ -1339,14 +1461,14 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
           animeId,
           episode,
           from: effectiveSourceUrl,
-          to: allanimeFallback,
-          provider: "allanime",
-          reason: allanimeFallbackReason,
+          to: ptBrFallback,
+          provider: "ptbr_fallback",
+          reason: ptBrFallbackReason,
         })
       );
-      effectiveSourceUrl = allanimeFallback;
+      effectiveSourceUrl = ptBrFallback;
       downloadReferer = null;
-      db.run(`UPDATE downloads SET source_url = ?, provider = ? WHERE id = ?`, [allanimeFallback, "allanime", jobId]);
+      db.run(`UPDATE downloads SET source_url = ?, provider = ? WHERE id = ?`, [ptBrFallback, "ptbr_fallback", jobId]);
     }
   }
 
