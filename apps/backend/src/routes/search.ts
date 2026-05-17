@@ -3,6 +3,7 @@ import { animefireSearch, goyabuSearch, animefireEpisodes, goyabuEpisodes } from
 import { searchAllAnime, getAllAnimeEpisodes, getAllAnimeStreamUrl } from "../services/allanime.ts";
 import { searchAllProviders, getEpisodesWithFallback, getProviderInfo, type Provider } from "../services/provider-chain.ts";
 import { searchKitsu } from "../services/kitsu.ts";
+import { searchNyaa } from "../services/nyaa.ts";
 import { logger } from "../utils/logger.ts";
 
 export const searchRoutes = new Elysia({ prefix: "/search" })
@@ -69,6 +70,25 @@ export const searchRoutes = new Elysia({ prefix: "/search" })
     if (source === "superflix") {
       const { results, providerStats } = await searchAllProviders(q, ["superflix"]);
       return { source: "superflix", total: results.length, results, providerStats };
+    }
+
+    if (source === "nyaa") {
+      try {
+        const nyaaResults = await searchNyaa(q, { limit: 30 });
+        return {
+          source: "nyaa",
+          total: nyaaResults.length,
+          results: nyaaResults.map((r) => ({
+            id: r.id,
+            title: `${r.title}${r.seeders > 0 ? ` [${r.seeders}S]` : ""}${r.size ? ` · ${r.size}` : ""}`,
+            url: r.magnetLink,
+            provider: "nyaa",
+          })),
+        };
+      } catch (err) {
+        logger.error("nyaa", String(err));
+        return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
+      }
     }
 
     // "all" — todos os providers em paralelo

@@ -13,6 +13,7 @@ type Props = {
   onSourceChange: (v: string) => void;
   onSearch: () => void;
   isBusy: boolean;
+  qbtEnabled: boolean;
 
   results: SearchResult[];
   providerStats: Record<string, ProviderSearchStat> | null;
@@ -34,14 +35,15 @@ type Props = {
 };
 
 export function SearchView({
-  query, onQueryChange, source, onSourceChange, onSearch, isBusy,
+  query, onQueryChange, source, onSourceChange, onSearch, isBusy, qbtEnabled,
   results, providerStats, selectedResult, onSelectResult,
   kitsuMeta, isLoadingMeta,
   episodes, selectedEpisodes, onToggleEpisode, onSelectAll, onClearAll, isLoadingEpisodes,
   downloadPath,
   onQueueSelected,
 }: Props) {
-  const canQueue = !isBusy && !!selectedResult && selectedEpisodes.length > 0 && downloadPath.trim().length > 0;
+  const isNyaa = selectedResult?.provider === "nyaa";
+  const canQueue = !isBusy && !!selectedResult && selectedEpisodes.length > 0 && (isNyaa || downloadPath.trim().length > 0);
 
   return (
     <div className="flex flex-1 flex-col gap-[20px] overflow-hidden">
@@ -72,6 +74,11 @@ export function SearchView({
               <option value="allanime">allanime</option>
               <option value="nineanime">9anime</option>
             </optgroup>
+            {qbtEnabled && (
+              <optgroup label="── Torrent ──">
+                <option value="nyaa">nyaa.si</option>
+              </optgroup>
+            )}
           </select>
           <button
             onClick={onSearch}
@@ -234,8 +241,8 @@ export function SearchView({
                   </div>
                 </div>
 
-                {/* Guard de download path */}
-                {downloadPath.trim().length === 0 && (
+                {/* Guard de download path — não se aplica para nyaa (vai direto ao qbt) */}
+                {downloadPath.trim().length === 0 && selectedResult?.provider !== "nyaa" && (
                   <p className="rounded border border-[#f9e2af]/30 bg-[#f9e2af]/5 px-3 py-2 text-[12px] text-[#f9e2af]">
                     ⚠ Pasta de download não configurada.{" "}
                     <span className="text-[#cba6f7]">Configure em [⚙ config]</span> antes de baixar.
@@ -250,6 +257,8 @@ export function SearchView({
                 >
                   {isBusy
                     ? "aguarde..."
+                    : selectedResult?.provider === "nyaa"
+                    ? `▶ ENVIAR AO QBITTORRENT`
                     : `▶ ENFILEIRAR ${selectedEpisodes.length} EPISÓDIO${selectedEpisodes.length !== 1 ? "S" : ""}`}
                 </button>
               </div>

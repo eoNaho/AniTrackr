@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  addTorrent,
   clearQueueMonitor,
   cancelAllDownloads,
   cancelDownloadById,
@@ -224,6 +225,7 @@ export function TrackerHome() {
 
   const [downloadPath, setDownloadPath] = useState("");
   const [allowSimulatedDownloads, setAllowSimulatedDownloads] = useState("false");
+  const [qbtEnabled, setQbtEnabled] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSource, setSearchSource] = useState("all");
@@ -279,6 +281,7 @@ export function TrackerHome() {
       setBackendStatus("online");
       setDownloadPath(cfgRes.download_path ?? "");
       setAllowSimulatedDownloads(cfgRes.allow_simulated_downloads ?? "false");
+      setQbtEnabled(cfgRes.qbittorrent_enabled === "true");
       const statsByStatus = (statsRes as { byStatus?: Record<string, number> }).byStatus;
       pushLog("api", `online v${health.version} | queued: ${String(statsByStatus?.queued ?? 0)}`);
     } catch (err) {
@@ -660,7 +663,7 @@ export function TrackerHome() {
     setIsLoadingMeta(true);
     setIsLoadingEpisodes(true);
 
-    fetchMetadataSearch(result.title, "kitsu")
+    fetchMetadataSearch(result.title.split(" [")[0].split(" ·")[0], "kitsu")
       .then((res) => {
         if (selectVersionRef.current !== version) return;
         if (res.results?.length) {
@@ -672,6 +675,19 @@ export function TrackerHome() {
       })
       .catch(() => { if (selectVersionRef.current === version) pushLog("meta", "kitsu: falha"); })
       .finally(() => { if (selectVersionRef.current === version) setIsLoadingMeta(false); });
+
+    if (result.provider === "nyaa") {
+      const nyaaEp: SearchEpisode = {
+        key: `nyaa::${result.id ?? result.url ?? "0"}`,
+        number: 1,
+        label: "▼ Adicionar ao qBittorrent",
+        url: result.url ?? "",
+      };
+      setEpisodes([nyaaEp]);
+      setSelectedEpisodes([nyaaEp.key]);
+      setIsLoadingEpisodes(false);
+      return;
+    }
 
     searchEpisodes({ provider: result.provider ?? searchSource, url: result.url, allAnimeId: result.allAnimeId ?? result.id })
       .then((res) => {
@@ -700,6 +716,21 @@ export function TrackerHome() {
   async function handleQueueSelected() {
     if (!selectedResult || selectedEpisodes.length === 0) return;
     setIsBusy(true);
+
+    if (selectedResult.provider === "nyaa") {
+      try {
+        const magnetLink = selectedResult.url ?? "";
+        if (!magnetLink) throw new Error("Magnet link ausente neste resultado.");
+        await addTorrent({ magnetLink });
+        pushLog("torrent", `${selectedResult.title.split(" [")[0]}: adicionado ao qBittorrent`);
+      } catch (e) {
+        pushLog("torrent", `erro: ${(e as Error).message}`);
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
     try {
       const selectedSet = new Set(selectedEpisodes);
       const selectedEntries = episodes
@@ -925,6 +956,7 @@ export function TrackerHome() {
               onSourceChange={setSearchSource}
               onSearch={handleSearch}
               isBusy={isBusy}
+              qbtEnabled={qbtEnabled}
               results={searchResults}
               providerStats={searchProviderStats}
               selectedResult={selectedResult}
