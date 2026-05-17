@@ -21,7 +21,19 @@ export function CollectionsSidebar({ onFilter, activeFilter }: Props) {
   const [data, setData] = useState<CollectionsData | null>(null);
 
   useEffect(() => {
-    fetchCollections().then(setData);
+    let active = true;
+    fetchCollections()
+      .then((payload) => {
+        if (!active) return;
+        setData(payload);
+      })
+      .catch(() => {
+        if (!active) return;
+        setData(null);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (!data) return null;

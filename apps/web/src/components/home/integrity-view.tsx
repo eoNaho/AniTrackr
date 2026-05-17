@@ -7,10 +7,18 @@ import { Panel, TuiButton, TuiEmpty, TuiInfoBox, TuiSection } from "./ui";
 export function IntegrityView() {
   const [report, setReport] = useState<IntegrityReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
     setLoading(true);
-    fetchIntegrity().then(setReport).finally(() => setLoading(false));
+    setError(null);
+    fetchIntegrity()
+      .then(setReport)
+      .catch((err) => {
+        setReport(null);
+        setError((err as Error).message);
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -32,7 +40,7 @@ export function IntegrityView() {
           {loading ? (
             <TuiEmpty>Scanning library...</TuiEmpty>
           ) : !report ? (
-            <TuiEmpty className="text-[#f38ba8]">Could not verify integrity.</TuiEmpty>
+            <TuiEmpty className="text-[#f38ba8]">{error ?? "Could not verify integrity."}</TuiEmpty>
           ) : (
             <>
               <div className="grid gap-2">
@@ -58,7 +66,7 @@ export function IntegrityView() {
           {loading ? (
             <TuiEmpty>Scanning library...</TuiEmpty>
           ) : !report ? (
-            <TuiEmpty className="text-[#f38ba8]">Could not verify integrity.</TuiEmpty>
+            <TuiEmpty className="text-[#f38ba8]">{error ?? "Could not verify integrity."}</TuiEmpty>
           ) : (
             <>
               <IssueSection

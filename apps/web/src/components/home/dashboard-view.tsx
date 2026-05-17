@@ -10,9 +10,28 @@ interface Props {
 export function DashboardView({ onSelectAnime }: Props) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchDashboard().then(setData).finally(() => setLoading(false));
+    let active = true;
+    setError(null);
+    fetchDashboard()
+      .then((payload) => {
+        if (!active) return;
+        setData(payload);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setData(null);
+        setError((err as Error).message);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (loading) {
@@ -20,7 +39,7 @@ export function DashboardView({ onSelectAnime }: Props) {
   }
 
   if (!data) {
-    return <div className="p-6 text-sm text-zinc-500">Nenhum dado disponível.</div>;
+    return <div className="p-6 text-sm text-zinc-500">{error ?? "Nenhum dado disponível."}</div>;
   }
 
   const totalItems =

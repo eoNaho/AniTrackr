@@ -7,10 +7,18 @@ import { Panel, TuiButton, TuiEmpty, TuiInfoBox, TuiSection } from "./ui";
 export function DiagnosticsPanel() {
   const [report, setReport] = useState<DiagnosticsReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
     setLoading(true);
-    fetchDiagnostics().then(setReport).finally(() => setLoading(false));
+    setError(null);
+    fetchDiagnostics()
+      .then(setReport)
+      .catch((err) => {
+        setReport(null);
+        setError((err as Error).message);
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -32,7 +40,7 @@ export function DiagnosticsPanel() {
           {loading ? (
             <TuiEmpty>Checking runtime...</TuiEmpty>
           ) : !report ? (
-            <TuiEmpty className="text-[#f38ba8]">Could not load diagnostics.</TuiEmpty>
+            <TuiEmpty className="text-[#f38ba8]">{error ?? "Could not load diagnostics."}</TuiEmpty>
           ) : (
             <>
               <div className="grid gap-2">
@@ -62,7 +70,7 @@ export function DiagnosticsPanel() {
           {loading ? (
             <TuiEmpty>Checking runtime...</TuiEmpty>
           ) : !report ? (
-            <TuiEmpty className="text-[#f38ba8]">Could not load diagnostics.</TuiEmpty>
+            <TuiEmpty className="text-[#f38ba8]">{error ?? "Could not load diagnostics."}</TuiEmpty>
           ) : (
             <>
               <RuntimeSection runtime={report.runtime} />

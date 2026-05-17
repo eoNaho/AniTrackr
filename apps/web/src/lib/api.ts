@@ -1,16 +1,28 @@
 const DEFAULT_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "";
+const LOCAL_BACKEND_URL = "http://localhost:3001";
 
 function getBackendUrl() {
   if (DEFAULT_BACKEND_URL) return DEFAULT_BACKEND_URL.replace(/\/+$/, "");
-  if (typeof window !== "undefined") return window.location.origin;
-  return "http://localhost:3000";
+  if (typeof window !== "undefined") return "";
+  return LOCAL_BACKEND_URL;
+}
+
+function backendUnavailableMessage(path: string, error: unknown): string {
+  const reason = error instanceof Error && error.message ? error.message : "network_error";
+  const target = DEFAULT_BACKEND_URL || "proxy local do Next (/api -> :3001)";
+  return `Backend indisponivel para ${path} via ${target}. Verifique se o backend subiu na porta 3001. Detalhe: ${reason}`;
 }
 
 async function requestJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${getBackendUrl()}${path}`, {
-    headers: { Accept: "application/json" },
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${getBackendUrl()}${path}`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+  } catch (error) {
+    throw new Error(backendUnavailableMessage(path, error));
+  }
 
   if (!response.ok) {
     throw new Error(`Backend request failed: ${response.status} ${response.statusText}`);

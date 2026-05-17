@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { mkdirSync, readFileSync, statSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { dirname } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
@@ -58,6 +58,71 @@ function normalizeForCompare(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function tokenizeForCompare(value: string): string[] {
+  return [...new Set(normalizeForCompare(value).split("-").filter((token) => token.length > 1))];
+}
+
+function scoreTokenOverlap(query: string, ...candidateValues: string[]): number {
+  const queryTokens = tokenizeForCompare(query);
+  if (!queryTokens.length) return 0;
+
+  const candidateTokens = new Set(candidateValues.flatMap((value) => tokenizeForCompare(value)));
+  let overlap = 0;
+  for (const token of queryTokens) {
+    if (candidateTokens.has(token)) overlap += 1;
+  }
+
+  return overlap * 3;
+}
+
+function sanitizeSearchQuery(value: string): string {
+  return value
+    .replace(/\s+\d+(?:[.,]\d+)?\s+A\d+\b/gi, " ")
+    .replace(/\(\s*dublado\s*\)/gi, " ")
+    .replace(/[:'"`\u00B4\u2019]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractQueryFromSourceUrl(sourceUrl: string | null | undefined): string | null {
+  if (!sourceUrl) return null;
+
+  try {
+    const parsed = new URL(sourceUrl);
+    const slug = parsed.pathname.match(/\/animes\/([^/]+)/i)?.[1] ?? "";
+    if (!slug) return null;
+
+    const normalized = slug
+      .replace(/-todos-os-episodios$/i, "")
+      .replace(/-\d+\/?$/i, "")
+      .replace(/-dublado$/i, "")
+      .replace(/-/g, " ")
+      .trim();
+
+    return normalized || null;
+  } catch {
+    return null;
+  }
+}
+
+function buildSearchQueryCandidates(...values: Array<string | null | undefined>): string[] {
+  const candidates: string[] = [];
+
+  for (const value of values) {
+    const raw = value?.trim();
+    if (!raw) continue;
+
+    const sanitized = sanitizeSearchQuery(raw);
+    for (const candidate of [raw, sanitized]) {
+      const normalized = candidate.trim();
+      if (!normalized) continue;
+      if (!candidates.includes(normalized)) candidates.push(normalized);
+    }
+  }
+
+  return candidates;
+}
+
 function scoreAnimefireCandidate(url: string, title: string, query: string, season: number): number {
   const urlLower = url.toLowerCase();
   const titleNorm = normalizeForCompare(title);
@@ -67,6 +132,7 @@ function scoreAnimefireCandidate(url: string, title: string, query: string, seas
   if (querySlug && urlLower.includes(querySlug)) score += 4;
   if (querySlug && urlLower.includes(`${querySlug}-todos-os-episodios`)) score += 6;
   if (titleNorm && querySlug && titleNorm.includes(querySlug)) score += 2;
+  score += scoreTokenOverlap(query, url, title);
 
   if (season <= 1 && /(2nd-season|season-2|segunda-temporada|temporada-2|2a-temporada|part-2)/i.test(urlLower)) {
     score -= 6;
@@ -77,15 +143,19 @@ function scoreAnimefireCandidate(url: string, title: string, query: string, seas
 }
 
 async function resolveAnimefireFallbackSource(animeId: string, episode: number, season: number): Promise<string | null> {
-  const anime = db.query<{ title: string; title_english: string | null }, [string]>(
-    `SELECT title, title_english FROM animes WHERE id = ?`
+  const anime = db.query<{ title: string; title_english: string | null; source_url: string | null }, [string]>(
+    `SELECT title, title_english, source_url FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return null;
 
-  const queryCandidates = [anime.title, anime.title_english ?? ""]
+  const legacyQueryCandidates = [anime.title, anime.title_english ?? ""]
     .map((q) => q.trim())
     .filter((q) => q.length > 0)
-    .map((q) => q.replace(/[:'"`´’]/g, " ").replace(/\s+/g, " ").trim());
+    .map((q) => sanitizeSearchQuery(q));
+  const queryCandidates = buildSearchQueryCandidates(
+    extractQueryFromSourceUrl(anime.source_url),
+    ...legacyQueryCandidates
+  );
 
   for (const query of queryCandidates) {
     let hits: Awaited<ReturnType<typeof animefireSearch>> = [];
@@ -124,7 +194,8 @@ function scoreAllAnimeCandidate(
   candidate: { name: string; englishName: string | null; episodeCount: number },
   query: string,
   season: number,
-  episode: number
+  episode: number,
+  targetEpisodeCount: number
 ): number {
   const queryNorm = normalizeForCompare(query);
   const nameNorm = normalizeForCompare(candidate.name);
@@ -138,13 +209,19 @@ function scoreAllAnimeCandidate(
   if (queryNorm && nameNorm.includes(queryNorm)) score += 6;
   if (queryNorm && englishNorm.includes(queryNorm)) score += 7;
   if (queryNorm && queryNorm.includes(nameNorm)) score += 4;
+  score += scoreTokenOverlap(query, candidate.name, candidate.englishName ?? "");
 
   if (candidate.episodeCount >= episode) score += 2;
+  if (targetEpisodeCount > 0) {
+    const diff = Math.abs(candidate.episodeCount - targetEpisodeCount);
+    if (diff === 0) score += 8;
+    else score -= Math.min(24, diff * 3);
+  }
 
   if (/(\bmini\b|chibi|special)/i.test(merged)) score -= 8;
 
-  if (season <= 1 && /(2nd|season\s*2|ni no shou|san no shou|3rd|season\s*3|part\s*2|part\s*3|\bs2\b|\bs3\b)/i.test(merged)) {
-    score -= 6;
+  if (season <= 1 && /(2nd|season\s*2|ni no shou|san no shou|3rd|season\s*3|part\s*2|part\s*3|\bs2\b|\bs3\b|\u222C)/i.test(merged)) {
+    score -= 24;
   }
 
   if (/movie|filme|gekijouban/i.test(merged)) score -= 4;
@@ -153,15 +230,19 @@ function scoreAllAnimeCandidate(
 }
 
 async function resolveAllAnimeFallbackSource(animeId: string, episode: number, season: number): Promise<string | null> {
-  const anime = db.query<{ title: string; title_english: string | null }, [string]>(
-    `SELECT title, title_english FROM animes WHERE id = ?`
+  const anime = db.query<{ title: string; title_english: string | null; source_url: string | null; episode_count: number }, [string]>(
+    `SELECT title, title_english, source_url, episode_count FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return null;
 
-  const queryCandidates = [anime.title_english ?? "", anime.title]
+  const legacyQueryCandidates = [anime.title_english ?? "", anime.title]
     .map((q) => q.trim())
     .filter((q) => q.length > 0)
-    .map((q) => q.replace(/[:'"`Â´â€™]/g, " ").replace(/\s+/g, " ").trim());
+    .map((q) => sanitizeSearchQuery(q));
+  const queryCandidates = buildSearchQueryCandidates(
+    extractQueryFromSourceUrl(anime.source_url),
+    ...legacyQueryCandidates
+  );
 
   for (const query of queryCandidates) {
     let hits: Awaited<ReturnType<typeof searchAllAnime>> = [];
@@ -175,7 +256,7 @@ async function resolveAllAnimeFallbackSource(animeId: string, episode: number, s
     const ranked = hits
       .map((hit) => ({
         ...hit,
-        score: scoreAllAnimeCandidate(hit, query, season, episode),
+        score: scoreAllAnimeCandidate(hit, query, season, episode, anime.episode_count ?? 0),
       }))
       .filter((hit) => hit.score >= 10)
       .sort((a, b) => b.score - a.score)
@@ -282,8 +363,73 @@ function buildYtDlpFormatSelector(quality: string): string {
 function inferFragmentConcurrency(sourceUrl: string): number {
   const lower = sourceUrl.toLowerCase();
   if (lower.includes(".m3u8")) return 8;
-  if (lower.includes("googlevideo.com")) return 4;
-  return 1;
+  if (lower.includes("googlevideo.com")) return 8;
+  if (lower.endsWith(".mp4") || lower.includes(".mp4?")) return 6;
+  return 2;
+}
+
+function shouldUseFfmpegLocation(ffmpegPath: string): boolean {
+  const raw = ffmpegPath.trim();
+  if (!raw) return false;
+
+  const looksLikePath = raw.includes("/") || raw.includes("\\") || raw.includes(":");
+  if (!looksLikePath) return false;
+  return existsSync(raw);
+}
+
+function isAnimefireEpisodePageUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.endsWith("animefire.io") && !host.endsWith("animefire.plus")) return false;
+    return /\/animes\/[^/]+\/\d+\/?$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isLowQualityGoogleVideoUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes("googlevideo.com")) return false;
+
+    const mime = (parsed.searchParams.get("mime") ?? "").toLowerCase();
+    const itag = parseInt(parsed.searchParams.get("itag") ?? "0", 10);
+
+    if (mime.includes("video/3gpp")) return true;
+    if ([13, 17, 18, 36].includes(itag)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function shouldPreferAllAnimeFallback(sourceUrl: string | null, effectiveSourceUrl: string | null): string | null {
+  if (!effectiveSourceUrl) return null;
+
+  if (isAnimefireEpisodePageUrl(effectiveSourceUrl)) {
+    return "animefire_page_unresolved";
+  }
+
+  if (!sourceUrl) return null;
+
+  try {
+    const sourceHost = new URL(sourceUrl).hostname.toLowerCase();
+    const cameFromFragileProvider =
+      sourceHost.endsWith("animefire.io") ||
+      sourceHost.endsWith("animefire.plus") ||
+      sourceHost.endsWith("goyabu.io") ||
+      sourceHost.endsWith("blogger.com");
+
+    if (cameFromFragileProvider && isLowQualityGoogleVideoUrl(effectiveSourceUrl)) {
+      return "low_quality_googlevideo_preferred_hls";
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 function kickQueue(delayMs = 100) {
@@ -747,7 +893,7 @@ async function realDownload(
     DOWNLOAD_UA,
   ];
 
-  if (ffmpegPath) {
+  if (shouldUseFfmpegLocation(ffmpegPath)) {
     args.push("--ffmpeg-location", ffmpegPath);
   }
 
@@ -1079,6 +1225,29 @@ async function startDownload(jobId: string, animeId: string, episode: number, se
       }
     } catch {
       // keep original source resolution result
+    }
+  }
+
+  const allanimeFallbackReason = shouldPreferAllAnimeFallback(sourceUrl, effectiveSourceUrl);
+  if (effectiveSourceUrl && allanimeFallbackReason) {
+    const allanimeFallback = await resolveAllAnimeFallbackSource(animeId, episode, season);
+    if (allanimeFallback && allanimeFallback !== effectiveSourceUrl) {
+      logger.warn(
+        "downloader",
+        JSON.stringify({
+          event: "provider_fallback_source",
+          jobId,
+          animeId,
+          episode,
+          from: effectiveSourceUrl,
+          to: allanimeFallback,
+          provider: "allanime",
+          reason: allanimeFallbackReason,
+        })
+      );
+      effectiveSourceUrl = allanimeFallback;
+      downloadReferer = null;
+      db.run(`UPDATE downloads SET source_url = ?, provider = ? WHERE id = ?`, [allanimeFallback, "allanime", jobId]);
     }
   }
 

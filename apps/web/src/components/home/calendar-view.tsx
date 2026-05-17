@@ -10,15 +10,32 @@ export function CalendarView() {
   const [discover, setDiscover] = useState<CalendarEntry[]>([]);
   const [recentlyDetected, setRecentlyDetected] = useState<unknown[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let active = true;
+    setError(null);
     fetchCalendar(range)
       .then((d) => {
+        if (!active) return;
         setPriority(d.priority);
         setDiscover(d.discover);
         setRecentlyDetected(d.recentlyDetected);
       })
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (!active) return;
+        setPriority([]);
+        setDiscover([]);
+        setRecentlyDetected([]);
+        setError((err as Error).message);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [range]);
 
   const priorityGrouped = groupByDate(priority);
@@ -77,6 +94,8 @@ export function CalendarView() {
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4">
           {loading ? (
             <TuiEmpty>Carregando calendario...</TuiEmpty>
+          ) : error ? (
+            <TuiEmpty>{error}</TuiEmpty>
           ) : isEmpty ? (
             <TuiEmpty>
               Nenhum lancamento encontrado para {range === "week" ? "esta semana" : "este mes"}.

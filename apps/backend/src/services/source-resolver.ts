@@ -21,6 +21,16 @@ function normalizeEscapedUrl(value: string | null | undefined): string {
   return value.replace(/\\\//g, "/").trim();
 }
 
+function isBloggerTokenUrl(value: string): boolean {
+  return /https?:\/\/(?:www\.)?blogger\.com\/video\.g\?token=/i.test(value);
+}
+
+function extractIframeSource(html: string): string | null {
+  const match = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"'<>]+)["']/i);
+  const candidate = normalizeEscapedUrl(match?.[1] ?? "");
+  return candidate && isHttpUrl(candidate) ? candidate : null;
+}
+
 function pickBestPlayUrl(play: unknown): string | null {
   if (!Array.isArray(play)) return null;
 
@@ -203,6 +213,62 @@ function decodeEscapedBloggerBatchUrl(raw: string): string {
   return value;
 }
 
+function scoreGoogleVideoCandidate(candidate: string): number {
+  try {
+    const parsed = new URL(candidate);
+    const mime = (parsed.searchParams.get("mime") ?? "").toLowerCase();
+    const itag = parseInt(parsed.searchParams.get("itag") ?? "0", 10);
+    const clen = parseInt(parsed.searchParams.get("clen") ?? "0", 10);
+    let score = 0;
+
+    if (mime.includes("video/mp4")) score += 40_000;
+    else if (mime.includes("video/webm")) score += 30_000;
+    else if (mime.includes("video/3gpp")) score -= 40_000;
+
+    const preferredItags: Record<number, number> = {
+      37: 12_000, // 1080p mp4
+      22: 10_000, // 720p mp4
+      59: 8_000,  // 480p mp4
+      18: 6_000,  // 360p mp4
+      43: 5_000,
+      36: -2_000, // low 3gpp
+      17: -8_000, // very low 3gpp
+      13: -12_000, // tiny 3gpp/mobile
+    };
+    score += preferredItags[itag] ?? 0;
+
+    if (Number.isFinite(clen) && clen > 0) {
+      score += Math.min(5_000, Math.round(clen / (1024 * 1024)));
+    }
+
+    return score;
+  } catch {
+    return Number.MIN_SAFE_INTEGER;
+  }
+}
+
+function extractGoogleVideoCandidate(raw: string): string | null {
+  const normalized = decodeEscapedBloggerBatchUrl(raw);
+  const candidates: string[] = [];
+
+  const direct = normalized.match(/https?:\/\/[^"\s]*googlevideo\.com\/[^"\s]+/gi) ?? [];
+  candidates.push(...direct);
+
+  const playUrls = normalized.match(/"play_url"\s*:\s*"([^"]+)"/gi) ?? [];
+  for (const entry of playUrls) {
+    const m = entry.match(/"play_url"\s*:\s*"([^"]+)"/i);
+    if (m?.[1]) candidates.push(m[1]);
+  }
+
+  const ranked = candidates
+    .map((candidate) => decodeEscapedBloggerBatchUrl(candidate).replace(/[",\]}]+$/g, ""))
+    .filter((candidate) => isHttpUrl(candidate) && candidate.includes("googlevideo.com"))
+    .map((candidate) => ({ candidate, score: scoreGoogleVideoCandidate(candidate) }))
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.candidate ?? null;
+}
+
 async function resolveBloggerGoogleVideoUrl(bloggerUrl: string, referer: string): Promise<string | null> {
   try {
     const token = new URL(bloggerUrl).searchParams.get("token") ?? "";
@@ -220,6 +286,9 @@ async function resolveBloggerGoogleVideoUrl(bloggerUrl: string, referer: string)
     if (!pageResponse.ok) return null;
 
     const pageHtml = await pageResponse.text();
+    const fromPage = extractGoogleVideoCandidate(pageHtml);
+    if (fromPage) return fromPage;
+
     const sid = pageHtml.match(/"FdrFJe"\s*:\s*"([^"]+)"/)?.[1] ?? "";
     const build = pageHtml.match(/"cfb2h"\s*:\s*"([^"]+)"/)?.[1] ?? "";
     const at = pageHtml.match(/"SNlM0e"\s*:\s*"([^"]+)"/)?.[1] ?? "";
@@ -256,12 +325,8 @@ async function resolveBloggerGoogleVideoUrl(bloggerUrl: string, referer: string)
     const batchText = await batchResponse.text();
     if (!batchText) return null;
 
-    const normalizedBatch = decodeEscapedBloggerBatchUrl(batchText);
-    const plainMatch = normalizedBatch.match(/https?:\/\/[^"\s]*googlevideo\.com\/[^"\s]+/i);
-    if (plainMatch?.[0]) {
-      const cleaned = plainMatch[0].replace(/[",\]}]+$/g, "");
-      if (isHttpUrl(cleaned)) return cleaned;
-    }
+    const fromBatch = extractGoogleVideoCandidate(batchText);
+    if (fromBatch) return fromBatch;
   } catch (err) {
     logger.debug("source-resolver", `blogger batchexecute failed: ${String(err)}`);
   }
@@ -324,7 +389,21 @@ async function resolveAnimefireEpisodeSource(episodeUrl: string): Promise<string
     
     const direct = extractDirectVideoFromHtml(pageHtml);
     if (direct) {
+      if (isBloggerTokenUrl(direct)) {
+        const fromBlogger = await resolveBloggerGoogleVideoUrl(direct, episodeUrl);
+        if (fromBlogger) return fromBlogger;
+        return direct;
+      }
       return direct;
+    }
+
+    const iframeSource = extractIframeSource(pageHtml);
+    if (iframeSource) {
+      if (isBloggerTokenUrl(iframeSource)) {
+        const fromBlogger = await resolveBloggerGoogleVideoUrl(iframeSource, episodeUrl);
+        if (fromBlogger) return fromBlogger;
+      }
+      return iframeSource;
     }
 
     const endpointRaw = pageHtml.match(/data-video-src="([^"]+)"/i)?.[1] ?? "";
@@ -356,16 +435,18 @@ async function resolveAnimefireEpisodeSource(episodeUrl: string): Promise<string
           const label = entry.label ?? "";
           const q = parseInt(label.replace(/\D+/g, ""), 10);
           const quality = Number.isFinite(q) ? q : 0;
-          return { src, quality };
+          const scoreBoost = src.includes("googlevideo.com") || src.includes(".mp4") ? 10000 : 0;
+          const scorePenalty = isBloggerTokenUrl(src) ? -10000 : 0;
+          return { src, quality, rank: quality + scoreBoost + scorePenalty };
         })
         .filter((entry) => entry.src && isHttpUrl(entry.src))
-        .sort((a, b) => b.quality - a.quality);
+        .sort((a, b) => b.rank - a.rank);
 
       if (ranked[0]?.src) return ranked[0].src;
     }
 
     const fallback = normalizeEscapedUrl(payload.src ?? payload.url ?? "");
-    if (fallback && isHttpUrl(fallback)) return fallback;
+    if (fallback && isHttpUrl(fallback) && !isBloggerTokenUrl(fallback)) return fallback;
   } catch (err) {
     logger.debug("source-resolver", `animefire resolve failed: ${String(err)}`);
   }
@@ -444,6 +525,8 @@ export async function resolveDownloadSourceUrl(sourceUrl: string): Promise<strin
             logger.info("source-resolver", `animefire->blogger->googlevideo resolved`);
             return fromBlogger;
           }
+          logger.warn("source-resolver", "animefire->blogger unresolved token, keeping episode page URL");
+          return sourceUrl;
         }
         logger.info("source-resolver", "animefire->direct-mp4 resolved");
         return fromAnimefire;

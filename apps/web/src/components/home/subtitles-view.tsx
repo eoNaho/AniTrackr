@@ -23,11 +23,17 @@ export function SubtitlesView({ selectedAnime }: Props) {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
     setLoading(true);
+    setError(null);
     fetchMissingSubtitles()
       .then((data) => setMissing(data.missing as MissingSubtitleItem[]))
+      .catch((err) => {
+        setMissing([]);
+        setError((err as Error).message);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -109,6 +115,8 @@ export function SubtitlesView({ selectedAnime }: Props) {
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4">
           {loading ? (
             <TuiEmpty>Scanning subtitle coverage...</TuiEmpty>
+          ) : error ? (
+            <TuiEmpty>{error}</TuiEmpty>
           ) : missing.length === 0 ? (
             <TuiEmpty>No missing subtitle files were detected.</TuiEmpty>
           ) : (
