@@ -1,12 +1,21 @@
-# ── Estágio 1: instala dependências ──────────────────────────────────────────
-FROM oven/bun:1-slim AS deps
+# ── Estágio 1: deps completas para o build ───────────────────────────────────
+FROM oven/bun:1-slim AS deps-build
 WORKDIR /app
 
 COPY apps/web/package.json ./package.json
 RUN bun install --frozen-lockfile
 
-# ── Estágio 2: build ──────────────────────────────────────────────────────────
-FROM deps AS builder
+# ── Estágio 2: deps de produção apenas (next + react) ────────────────────────
+# Separa as devDependencies (tailwind, typescript, eslint, @types/*)
+# das deps de runtime. Reduz node_modules de ~400MB para ~50MB.
+FROM oven/bun:1-slim AS deps-prod
+WORKDIR /app
+
+COPY apps/web/package.json ./package.json
+RUN bun install --production --frozen-lockfile
+
+# ── Estágio 3: build ──────────────────────────────────────────────────────────
+FROM deps-build AS builder
 WORKDIR /app
 
 COPY apps/web ./
@@ -20,23 +29,20 @@ ENV NODE_ENV=production
 
 RUN bun run build
 
-# ── Estágio 3: runtime — só o standalone output ───────────────────────────────
-# O "output: standalone" do Next.js gera .next/standalone com server.js +
-# apenas os node_modules que ele realmente usa. Não precisamos copiar o
-# node_modules inteiro do builder (economiza 400–600 MB).
+# ── Estágio 4: runtime final ──────────────────────────────────────────────────
+# Usa só as deps de produção + o .next compilado. Não inclui devDependencies.
 FROM oven/bun:1-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
 EXPOSE 3000
 
+COPY --from=deps-prod /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY apps/web/package.json ./package.json
+COPY apps/web/next.config.ts ./next.config.ts
 
-# node é um alias para bun nas imagens oven/bun — é o comando padrão para
-# o servidor standalone do Next.js e evita ambiguidade de resolução de módulo.
-CMD ["node", "server.js"]
+CMD ["bun", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]

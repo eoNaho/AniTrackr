@@ -4,7 +4,6 @@ import path from "node:path";
 const backendInternalUrl = (process.env.BACKEND_INTERNAL_URL?.trim() || "http://localhost:3001").replace(/\/+$/, "");
 
 const nextConfig: NextConfig = {
-  output: "standalone",
   reactCompiler: true,
   turbopack: {
     root: path.join(__dirname, "../.."),
