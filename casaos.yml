@@ -11,7 +11,8 @@ services:
       ANITRACKR_DATA_DIR: /data
       ANITRACKR_DOWNLOAD_PATH: /downloads
       ANITRACKR_MEDIA_PATH: /media/anime
-      ANITRACKR_QBITTORRENT_HOST: http://qbittorrent:8080
+      ANITRACKR_QBITTORRENT_ENABLED: "false"
+      ANITRACKR_QBITTORRENT_HOST: http://localhost:8080
       ANITRACKR_QBITTORRENT_SAVE_PATH: /downloads
     volumes:
       - type: bind
@@ -33,32 +34,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    depends_on:
-      - qbittorrent
-
-  qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
-    container_name: anitrackr-qbittorrent
-    restart: unless-stopped
-    environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
-      WEBUI_PORT: "8080"
-      TORRENTING_PORT: "6881"
-    volumes:
-      - type: bind
-        source: /DATA/AppData/anitrackr-qbittorrent
-        target: /config
-      - type: bind
-        source: /DATA/Downloads
-        target: /downloads
-    ports:
-      - "8080:8080"
-      - "6881:6881"
-      - "6881:6881/udp"
-    networks:
-      - anitrackr-net
 
   web:
     image: ghcr.io/eonaho/anitrackr-web:latest
@@ -96,9 +71,9 @@ x-casaos:
   tagline:
     custom: Busca, downloads e tracking de anime
   description:
-    custom: Frontend Next.js + backend Bun/Elysia com yt-dlp, ffmpeg e qBittorrent integrados para uso local no CasaOS.
+    custom: Frontend Next.js + backend Bun/Elysia com yt-dlp e ffmpeg para uso local no CasaOS, sem o servico interno de qBittorrent.
   tips:
     custom: |
-      Acesse a UI principal em http://SEU_HOST:3000 e o qBittorrent em http://SEU_HOST:8080.
-      No primeiro boot do qBittorrent, a senha do WebUI pode ser temporaria.
-      Se precisar, abra os logs do container do qBittorrent no CasaOS para ver a senha inicial.
+      Acesse a UI principal em http://SEU_HOST:3000.
+      Esta variante nao sobe o qBittorrent no CasaOS.
+      Se quiser torrents depois, use o arquivo casaos.yml ou configure um qBittorrent externo manualmente.
