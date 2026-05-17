@@ -30,10 +30,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 EXPOSE 3000
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
-CMD ["bun", "server.js"]
+# node é um alias para bun nas imagens oven/bun — é o comando padrão para
+# o servidor standalone do Next.js e evita ambiguidade de resolução de módulo.
+CMD ["node", "server.js"]
