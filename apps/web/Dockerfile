@@ -1,11 +1,14 @@
+# ── Estágio 1: instala dependências ──────────────────────────────────────────
 FROM oven/bun:1-slim AS deps
 WORKDIR /app
 
 COPY apps/web/package.json ./package.json
-RUN bun install
+RUN bun install --frozen-lockfile
 
+# ── Estágio 2: build ──────────────────────────────────────────────────────────
 FROM deps AS builder
 WORKDIR /app
+
 COPY apps/web ./
 
 ARG NEXT_PUBLIC_BACKEND_URL=
@@ -17,6 +20,10 @@ ENV NODE_ENV=production
 
 RUN bun run build
 
+# ── Estágio 3: runtime — só o standalone output ───────────────────────────────
+# O "output: standalone" do Next.js gera .next/standalone com server.js +
+# apenas os node_modules que ele realmente usa. Não precisamos copiar o
+# node_modules inteiro do builder (economiza 400–600 MB).
 FROM oven/bun:1-slim AS runner
 WORKDIR /app
 
@@ -25,6 +32,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 EXPOSE 3000
 
-COPY --from=builder /app ./
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
-CMD ["bun", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]
+CMD ["bun", "server.js"]
