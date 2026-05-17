@@ -1141,12 +1141,9 @@ async function realDownload(
   let downloadedBytes = 0;
   let speedKbps = 0;
 
-  // yt-dlp escreve [download]/[#...] no stderr, não no stdout.
-  // Lemos stderr em streaming para capturar progresso e acumulamos para diagnóstico de erro.
-  const reader = proc.stderr.getReader();
-  const decoder = new TextDecoder();
-  let carry = "";
-  const stderrLines: string[] = [];
+  // Lemos stdout E stderr em paralelo: yt-dlp escreve progresso no stderr,
+  // mas o aria2c (external downloader) pode escrever no stdout do yt-dlp.
+  const allOutputLines: string[] = [];
 
   const processLine = (line: string) => {
     // Formato yt-dlp nativo: [download]  42.3% of 234.00MiB at 5.12MiB/s ETA 00:44
@@ -1197,25 +1194,32 @@ async function realDownload(
     );
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    carry += decoder.decode(value, { stream: true });
-    const lines = carry.split(/\r?\n/);
-    carry = lines.pop() ?? "";
-    for (const line of lines) {
-      stderrLines.push(line);
-      // Aceita linhas do yt-dlp nativo ([download]) e do aria2c externo ([# ou contém %)
-      if (line.includes("[download]") || line.includes("[#") || (line.includes("%") && line.includes("/"))) {
-        processLine(line);
+  const drainStream = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    const dec = new TextDecoder();
+    let carry = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      carry += dec.decode(value, { stream: true });
+      const lines = carry.split(/\r\n|\r|\n/);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        allOutputLines.push(line);
+        if (line.includes("[download]") || line.includes("[#") || (line.includes("%") && line.includes("/"))) {
+          processLine(line);
+        }
       }
     }
-  }
+    if (carry) {
+      allOutputLines.push(carry);
+      if (carry.includes("[download]") || carry.includes("[#") || (carry.includes("%") && carry.includes("/"))) {
+        processLine(carry);
+      }
+    }
+  };
 
-  if (carry) {
-    stderrLines.push(carry);
-    if (carry.includes("[download]")) processLine(carry);
-  }
+  await Promise.all([drainStream(proc.stderr), drainStream(proc.stdout)]);
 
   const code = await proc.exited;
   active.delete(jobId);
@@ -1262,7 +1266,7 @@ async function realDownload(
     return;
   }
 
-  const errText = stderrLines.join("\n");
+  const errText = allOutputLines.join("\n");
   const recovered = await tryRecoverFromBloggerFailure(jobId, animeId, episode, season, sourceUrl, errText);
   if (recovered) return;
 
