@@ -13,7 +13,7 @@ WORKDIR /app
 # depois baixa ffmpeg e yt-dlp como binários estáticos — sem Python, sem
 # centenas de shared libs de codec que o apt puxa junto com o ffmpeg.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl xz-utils && \
+    apt-get install -y --no-install-recommends ca-certificates curl xz-utils aria2 && \
     rm -rf /var/lib/apt/lists/* && \
     ARCH=$(dpkg --print-architecture) && \
     FFMPEG_ARCH=$([ "$ARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \

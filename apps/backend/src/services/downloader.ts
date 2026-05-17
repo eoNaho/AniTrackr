@@ -13,6 +13,7 @@ import { getAniListAnime, resolveSeriesRootTitle } from "./anilist.ts";
 export type DownloadStatus = "queued" | "downloading" | "retry_wait" | "completed" | "failed" | "cancelled";
 const DOWNLOAD_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+const BLOGGER_ORIGIN = "https://www.blogger.com";
 
 export interface QueueJob {
   id: string;
@@ -361,9 +362,12 @@ function buildYtDlpFormatSelector(quality: string): string {
 }
 
 function inferFragmentConcurrency(sourceUrl: string): number {
+  const configOverride = getConfigInt("fragment_concurrency", 0, 0, 64);
+  if (configOverride > 0) return configOverride;
+
   const lower = sourceUrl.toLowerCase();
-  if (lower.includes(".m3u8")) return 8;
-  if (lower.includes("googlevideo.com")) return 8;
+  if (lower.includes(".m3u8")) return 16;
+  if (lower.includes("googlevideo.com")) return 16;
   if (lower.endsWith(".mp4") || lower.includes(".mp4?")) return 6;
   return 2;
 }
@@ -375,6 +379,39 @@ function shouldUseFfmpegLocation(ffmpegPath: string): boolean {
   const looksLikePath = raw.includes("/") || raw.includes("\\") || raw.includes(":");
   if (!looksLikePath) return false;
   return existsSync(raw);
+}
+
+// Cached probe — evita spawn repetido a cada download
+let aria2cAvailableCache: boolean | null = null;
+
+async function isAria2cAvailable(): Promise<boolean> {
+  if (aria2cAvailableCache !== null) return aria2cAvailableCache;
+
+  const useAria2cConfig = getConfig("use_aria2c").toLowerCase();
+  if (useAria2cConfig === "false" || useAria2cConfig === "0") {
+    aria2cAvailableCache = false;
+    return false;
+  }
+  if (useAria2cConfig === "true" || useAria2cConfig === "1") {
+    aria2cAvailableCache = true;
+    return true;
+  }
+
+  // auto-detect: tenta executar aria2c --version
+  const configured = getConfig("aria2c_path") || "aria2c";
+  try {
+    const probe = Bun.spawn([configured, "--version"], { stdout: "pipe", stderr: "pipe" });
+    const code = await probe.exited;
+    aria2cAvailableCache = code === 0;
+  } catch {
+    aria2cAvailableCache = false;
+  }
+
+  logger.info(
+    "downloader",
+    JSON.stringify({ event: "aria2c_probe", available: aria2cAvailableCache, path: configured })
+  );
+  return aria2cAvailableCache;
 }
 
 function isAnimefireEpisodePageUrl(value: string): boolean {
@@ -559,6 +596,19 @@ async function isPlayableStreamUrl(url: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function findActualOutputFile(outputTemplate: string): string | null {
+  const base = outputTemplate.replace(/\.%\(ext\)s$/, "");
+  for (const ext of ["mkv", "mp4", "ts", "webm", "m4v"]) {
+    const candidate = `${base}.${ext}`;
+    try {
+      if (statSync(candidate).size > 0) return candidate;
+    } catch {
+      // not found
+    }
+  }
+  return null;
 }
 
 function isExpiredStreamFailure(sourceUrl: string, errText: string): boolean {
@@ -901,15 +951,33 @@ async function realDownload(
     args.push("-N", String(fragmentConcurrency));
   }
 
-  if (sourceUrl.toLowerCase().includes(".m3u8")) {
+  // yt-dlp retry flags — previne falhas intermitentes em fragmentos HLS
+  const ytdlpRetries = getConfigInt("yt_dlp_retries", 5, 1, 20);
+  const ytdlpFragmentRetries = getConfigInt("yt_dlp_fragment_retries", 10, 1, 50);
+  args.push("--retries", String(ytdlpRetries));
+  args.push("--fragment-retries", String(ytdlpFragmentRetries));
+
+  const isGoogleVideo = sourceUrl.toLowerCase().includes("googlevideo.com");
+  const isHls = sourceUrl.toLowerCase().includes(".m3u8");
+  const aria2cPath = getConfig("aria2c_path") || "aria2c";
+  const useAria2c = (isGoogleVideo || isHls) && (await isAria2cAvailable());
+
+  if (useAria2c) {
+    // aria2c com 16 conexões paralelas — ideal para MP4 direto e HLS do googlevideo
+    args.push("--downloader", aria2cPath);
+    args.push("--downloader-args", "aria2c:-x 16 -k 1M --max-connection-per-server=16 --min-split-size=1M");
+  } else if (isHls) {
+    // Fallback: ffmpeg para streams HLS quando aria2c não disponível
     args.push("--downloader", "ffmpeg");
     args.push("--hls-use-mpegts");
   }
 
-  if (referer) {
-    args.push("--referer", referer);
+  // Referer: usar referer explícito, ou Blogger origin para googlevideo como fallback
+  const effectiveReferer = referer ?? (isGoogleVideo ? BLOGGER_ORIGIN : null);
+  if (effectiveReferer) {
+    args.push("--referer", effectiveReferer);
     try {
-      const origin = new URL(referer).origin;
+      const origin = new URL(effectiveReferer).origin;
       args.push("--add-header", `Origin:${origin}`);
     } catch {
       // invalid referer, ignore
@@ -951,22 +1019,46 @@ async function realDownload(
   let downloadedBytes = 0;
   let speedKbps = 0;
 
-  const reader = proc.stdout.getReader();
+  // yt-dlp escreve [download]/[#...] no stderr, não no stdout.
+  // Lemos stderr em streaming para capturar progresso e acumulamos para diagnóstico de erro.
+  const reader = proc.stderr.getReader();
   const decoder = new TextDecoder();
   let carry = "";
+  const stderrLines: string[] = [];
 
   const processLine = (line: string) => {
+    // Formato yt-dlp nativo: [download]  42.3% of 234.00MiB at 5.12MiB/s ETA 00:44
+    // Formato aria2c (downloader externo): [#abc123 10MiB/234MiB(4%) CN:16 DL:5.24MiB/s ETA:44s]
+    // Formato fragmentos HLS: [download] Downloading fragment 5 of 240
+
+    const fragmentMatch = line.match(/Downloading fragment (\d+) of (\d+)/i);
+    if (fragmentMatch) {
+      const current = parseInt(fragmentMatch[1], 10);
+      const total = parseInt(fragmentMatch[2], 10);
+      if (total > 0) lastProgress = Math.round((current / total) * 100);
+    }
+
     const progressMatch = line.match(/(\d+\.?\d*)%/);
     if (progressMatch) {
       lastProgress = Math.round(parseFloat(progressMatch[1]));
     }
 
-    const totalMatch = line.match(/of\s+~?\s*(\d+\.?\d*)\s*([KMG]i?B)/i);
-    if (totalMatch) {
-      totalBytes = parseSizeToBytes(parseFloat(totalMatch[1]), totalMatch[2]);
+    // yt-dlp nativo: "of 234.00MiB"
+    const totalMatchNative = line.match(/of\s+~?\s*(\d+\.?\d*)\s*([KMG]i?B)/i);
+    if (totalMatchNative) {
+      totalBytes = parseSizeToBytes(parseFloat(totalMatchNative[1]), totalMatchNative[2]);
     }
 
-    const speedMatch = line.match(/at\s+(\d+\.?\d*)\s*([KMG]i?B)\/s/i);
+    // aria2c: "10MiB/234MiB" — extrai o denominador
+    if (!totalMatchNative) {
+      const totalMatchAria2c = line.match(/[\d.]+[KMG]i?B\/([\d.]+)([KMG]i?B)/i);
+      if (totalMatchAria2c) {
+        totalBytes = parseSizeToBytes(parseFloat(totalMatchAria2c[1]), totalMatchAria2c[2]);
+      }
+    }
+
+    // yt-dlp nativo: "at 5.12MiB/s" | aria2c: "DL:5.24MiB/s"
+    const speedMatch = line.match(/(?:at|DL:)\s*([\d.]+)\s*([KMG]i?B)\/s/i);
     if (speedMatch) {
       speedKbps = Math.round(parseSizeToBytes(parseFloat(speedMatch[1]), speedMatch[2]) / 1024);
     }
@@ -990,28 +1082,35 @@ async function realDownload(
     const lines = carry.split(/\r?\n/);
     carry = lines.pop() ?? "";
     for (const line of lines) {
-      if (line.includes("[download]")) processLine(line);
+      stderrLines.push(line);
+      // Aceita linhas do yt-dlp nativo ([download]) e do aria2c externo ([# ou contém %)
+      if (line.includes("[download]") || line.includes("[#") || (line.includes("%") && line.includes("/"))) {
+        processLine(line);
+      }
     }
   }
 
-  if (carry.includes("[download]")) {
-    processLine(carry);
+  if (carry) {
+    stderrLines.push(carry);
+    if (carry.includes("[download]")) processLine(carry);
   }
 
   const code = await proc.exited;
   active.delete(jobId);
 
   if (code === 0) {
+    // yt-dlp pode salvar com extensão diferente de .mkv (.mp4, .ts, etc.)
+    const actualFilePath = findActualOutputFile(outputTemplate) ?? filePath;
     let diskSize = 0;
     try {
-      diskSize = statSync(filePath).size;
+      diskSize = statSync(actualFilePath).size;
     } catch {
       diskSize = 0;
     }
 
     if (diskSize > 0 && diskSize < 1024 * 1024) {
       try {
-        const sample = readFileSync(filePath, "utf8").slice(0, 1200).toLowerCase();
+        const sample = readFileSync(actualFilePath, "utf8").slice(0, 1200).toLowerCase();
         const looksJson = sample.trimStart().startsWith("{") && sample.includes("\"data\"");
         const looksHtml = sample.includes("<html") || sample.includes("<!doctype html");
         if (looksJson || looksHtml) {
@@ -1031,7 +1130,7 @@ async function realDownload(
     }
 
     const finalBytes = Math.max(totalBytes > 0 ? totalBytes : downloadedBytes, diskSize);
-    completeJob(jobId, animeId, episode, season, filePath, finalBytes);
+    completeJob(jobId, animeId, episode, season, actualFilePath, finalBytes);
     return;
   }
 
@@ -1041,7 +1140,7 @@ async function realDownload(
     return;
   }
 
-  const errText = await new Response(proc.stderr).text();
+  const errText = stderrLines.join("\n");
   const recovered = await tryRecoverFromBloggerFailure(jobId, animeId, episode, season, sourceUrl, errText);
   if (recovered) return;
 
