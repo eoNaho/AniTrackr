@@ -1012,3 +1012,26 @@ export const batchLibraryAction = (action: BatchAction, animeIds: string[], payl
     `${getBackendUrl()}/api/library/batch`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, animeIds, payload }) }
   );
+
+// ── Update check ──────────────────────────────────────────────────────────────
+
+export type UpdateCheckResult = {
+  current: string;
+  latest: string | null;
+  hasUpdate: boolean;
+  releaseUrl: string | null;
+  publishedAt: string | null;
+  body: string | null;
+  isDocker: boolean;
+  checkedAt: string;
+  error?: string;
+};
+
+export const fetchUpdateCheck = () =>
+  requestJson<UpdateCheckResult>("/api/update/check");
+
+export const forceUpdateCheck = () =>
+  requestJsonWithBodyError<UpdateCheckResult>(
+    `${getBackendUrl()}/api/update/check`,
+    { method: "POST" }
+  );

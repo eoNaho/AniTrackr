@@ -242,6 +242,10 @@ const defaultConfig: Record<string, string> = {
   retry_max_attempts: "3",
   retry_base_delay_seconds: "20",
   retry_max_delay_seconds: "900",
+  // OpenSubtitles
+  opensubtitles_api_key:  process.env.OPENSUBTITLES_API_KEY?.trim() || "",
+  opensubtitles_username: "",
+  opensubtitles_password: "",
   // qBittorrent
   qbittorrent_enabled:  defaultQbEnabled,
   qbittorrent_host:     defaultQbHost,

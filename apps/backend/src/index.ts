@@ -16,6 +16,8 @@ import { franchiseRoutes } from "./routes/franchise.ts";
 import { integrityRoutes } from "./routes/integrity.ts";
 import { discoverRoutes } from "./routes/discover.ts";
 import { queueProfileRoutes } from "./routes/queue-profiles.ts";
+import { updateRoutes, CURRENT_VERSION } from "./routes/update.ts";
+import { hasOpenSubtitlesKey } from "./services/opensubtitles.ts";
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
 import { runBackupIfDue } from "./services/backup.ts";
@@ -35,11 +37,11 @@ const app = new Elysia()
   .get("/health", () => ({
     status: "ok",
     service: "anitrackr",
-    version: "2.0.1",
+    version: CURRENT_VERSION,
     timestamp: new Date().toISOString(),
     uptime: Math.round(process.uptime()),
     env: {
-      hasOpenSubtitlesKey: !!process.env.OPENSUBTITLES_API_KEY,
+      hasOpenSubtitlesKey: hasOpenSubtitlesKey(),
     },
   }))
 
@@ -61,6 +63,7 @@ const app = new Elysia()
       .use(integrityRoutes)
       .use(discoverRoutes)
       .use(queueProfileRoutes)
+      .use(updateRoutes)
       // ── Auto-schedule (registrado aqui para garantir que o módulo já foi inicializado) ──
       .get("/auto-schedule/status", () => getAutoScheduleStatus())
       .post("/auto-schedule/run", async () => {

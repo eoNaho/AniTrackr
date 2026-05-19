@@ -10,16 +10,32 @@
 import { writeFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { logger } from "../utils/logger.ts";
+import db from "../db/index.ts";
 
 const BASE = "https://api.opensubtitles.com/api/v1";
 const APP_NAME = "anitrackr";
-const APP_VERSION = "2.0.1";
+const APP_VERSION = "2.1.0";
 
-const API_KEY = process.env.OPENSUBTITLES_API_KEY ?? "";
+// Lê a chave do banco a cada chamada — permite configurar via Settings sem reiniciar
+function getOsConfig(): { apiKey: string; username: string; password: string } {
+  const rows = db.query<{ key: string; value: string }, []>(
+    `SELECT key, value FROM config WHERE key IN ('opensubtitles_api_key','opensubtitles_username','opensubtitles_password')`
+  ).all();
+  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return {
+    apiKey:   map.opensubtitles_api_key   || process.env.OPENSUBTITLES_API_KEY  || "",
+    username: map.opensubtitles_username  || "",
+    password: map.opensubtitles_password  || "",
+  };
+}
+
+export function hasOpenSubtitlesKey(): boolean {
+  return Boolean(getOsConfig().apiKey);
+}
 
 function osHeaders(token?: string): Record<string, string> {
   const h: Record<string, string> = {
-    "Api-Key": API_KEY,
+    "Api-Key": getOsConfig().apiKey,
     "User-Agent": `${APP_NAME} v${APP_VERSION}`,
     Accept: "application/json",
     "Content-Type": "application/json",

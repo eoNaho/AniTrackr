@@ -15,11 +15,14 @@ import {
   updateQueueProfile,
   createQueueProfile,
   deleteQueueProfile,
+  fetchUpdateCheck,
+  forceUpdateCheck,
   type ProviderHealthEntry,
   type QbtConnectionStatus,
   type DownloadHistoryMonth,
   type DownloadHistoryProvider,
   type QueueProfile,
+  type UpdateCheckResult,
 } from "@/lib/api";
 import { Panel } from "./ui";
 
@@ -385,6 +388,10 @@ const DEFAULTS: ConfigState = {
   nyaa_preferred_group: "SubsPlease",
   nyaa_preferred_resolution: "1080p",
   nyaa_default_category: "1_2",
+  // OpenSubtitles
+  opensubtitles_api_key: "",
+  opensubtitles_username: "",
+  opensubtitles_password: "",
 };
 
 // ── Queue Profiles ────────────────────────────────────────────────────────────
@@ -532,6 +539,156 @@ function QueueProfilesPanel() {
 const pInputCls = "w-full border border-[#45475a] bg-[#0d0d12] px-2 py-1 text-[12px] text-[#e0e0ed] outline-none focus:border-[#cba6f7] font-mono";
 function PF({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="flex flex-col gap-1"><span className="text-[10px] uppercase text-[#6c7086] tracking-wider">{label}</span>{children}</div>;
+}
+
+// ── Update Panel ──────────────────────────────────────────────────────────────
+
+function UpdatePanel() {
+  const [info, setInfo] = useState<UpdateCheckResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showCmd, setShowCmd] = useState(false);
+
+  const load = useCallback(async (force = false) => {
+    setLoading(true);
+    try {
+      const res = force ? await forceUpdateCheck() : await fetchUpdateCheck();
+      setInfo(res);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => { void load(); }, 0);
+    return () => clearTimeout(t);
+  }, [load]);
+
+  const updateCmd = info?.isDocker
+    ? "docker compose pull && docker compose up -d"
+    : "git pull && bun install && bun run build";
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(updateCmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* fallback: show text */ }
+  }
+
+  const fmtDate = (iso: string | null) => {
+    if (!iso) return null;
+    try { return new Date(iso).toLocaleDateString("pt-BR", { day: "numeric", month: "short", year: "numeric" }); }
+    catch { return iso.slice(0, 10); }
+  };
+
+  return (
+    <Panel title="[ATUALIZAÇÃO]">
+      <div className="p-3 text-[12px] flex flex-col gap-3">
+        {/* Versão atual */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-[11px] text-[#6c7086] uppercase tracking-wider mb-1">Versão atual</div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-[#cba6f7]">{info?.current ?? "—"}</span>
+              {info?.isDocker && (
+                <span className="border border-[#45475a] px-1.5 py-0.5 text-[10px] text-[#89dceb] uppercase">Docker</span>
+              )}
+            </div>
+          </div>
+          <Btn onClick={() => void load(true)} disabled={loading}>{loading ? "..." : "↻ verificar"}</Btn>
+        </div>
+
+        {/* Status de atualização */}
+        {info && !info.error && (
+          info.latest ? (
+            <div className={`border p-3 flex flex-col gap-2 ${info.hasUpdate ? "border-[#a6e3a1] bg-[#a6e3a1]/5" : "border-[#45475a] bg-black/10"}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] text-[#6c7086] uppercase tracking-wider">Última versão</div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className={`font-bold text-base ${info.hasUpdate ? "text-[#a6e3a1]" : "text-[#bac2de]"}`}>
+                      {info.latest}
+                    </span>
+                    {info.hasUpdate
+                      ? <span className="text-[10px] font-bold text-[#a6e3a1] uppercase">● atualização disponível</span>
+                      : <span className="text-[10px] text-[#6c7086]">✓ em dia</span>
+                    }
+                  </div>
+                  {info.publishedAt && (
+                    <div className="text-[10px] text-[#45475a] mt-0.5">publicada em {fmtDate(info.publishedAt)}</div>
+                  )}
+                </div>
+                {info.releaseUrl && (
+                  <a href={info.releaseUrl} target="_blank" rel="noopener noreferrer"
+                    className="border border-[#45475a] px-2 py-1 text-[10px] text-[#6c7086] hover:border-[#cba6f7] hover:text-[#cba6f7]">
+                    ver release ↗
+                  </a>
+                )}
+              </div>
+
+              {info.body && (
+                <div className="border border-[#2a2a38] bg-black/20 px-2 py-2 text-[11px] text-[#6c7086] leading-relaxed whitespace-pre-wrap">
+                  {info.body}{info.body.length >= 600 ? "…" : ""}
+                </div>
+              )}
+
+              {info.hasUpdate && (
+                <div>
+                  <Btn onClick={() => setShowCmd((v) => !v)} variant="success">
+                    {showCmd ? "ocultar comando" : "▶ como atualizar"}
+                  </Btn>
+
+                  {showCmd && (
+                    <div className="mt-2 flex flex-col gap-2">
+                      <div className="text-[11px] text-[#6c7086]">
+                        {info.isDocker
+                          ? "Execute no host onde o Docker está rodando:"
+                          : "Execute no diretório do projeto:"}
+                      </div>
+                      <div className="flex items-center gap-2 border border-[#45475a] bg-black/30 px-3 py-2">
+                        <code className="flex-1 font-mono text-[12px] text-[#a6e3a1] break-all">{updateCmd}</code>
+                        <button
+                          onClick={() => void handleCopy()}
+                          className="shrink-0 border border-[#45475a] px-2 py-1 text-[10px] text-[#6c7086] hover:border-[#cba6f7] hover:text-[#cba6f7]"
+                        >
+                          {copied ? "✓ copiado" : "copiar"}
+                        </button>
+                      </div>
+                      {info.isDocker && (
+                        <div className="text-[10px] text-[#45475a]">
+                          O serviço será reiniciado automaticamente após o pull. O banco de dados e configurações são preservados via volume.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-[#6c7086]">
+              Sem releases publicadas ainda.{" "}
+              <a href={`https://github.com/${info.releaseUrl ? new URL(info.releaseUrl).pathname.split("/releases")[0].slice(1) : "eonaho/goanime-trackear"}`}
+                target="_blank" rel="noopener noreferrer" className="text-[#cba6f7] hover:underline">
+                ver repositório ↗
+              </a>
+            </div>
+          )
+        )}
+
+        {info?.error && (
+          <div className="text-[11px] text-[#f9e2af]">
+            Não foi possível verificar atualizações. Verifique a conexão com GitHub.
+          </div>
+        )}
+
+        {info?.checkedAt && (
+          <div className="text-[10px] text-[#45475a]">
+            última verificação: {new Date(info.checkedAt).toLocaleTimeString("pt-BR")}
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -866,6 +1023,55 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
               </div>
             </div>
           </Panel>
+
+          {/* Legendas / OpenSubtitles */}
+          <Panel title="[LEGENDAS / OPENSUBTITLES]">
+            <div className="p-3">
+              <div className="mb-3 border border-[#2a2a38] bg-black/20 px-3 py-2 text-[11px] text-[#6c7086] leading-relaxed">
+                <span className="text-[#cba6f7] font-bold">API Key</span> é necessária para busca de legendas.{" "}
+                <a href="https://www.opensubtitles.com/consumers" target="_blank" rel="noopener noreferrer" className="text-[#89dceb] hover:underline">
+                  opensubtitles.com/consumers ↗
+                </a>
+                <br />
+                <span className="text-[#cba6f7] font-bold">Usuário/Senha</span> são opcionais — necessários apenas para mais de 5 downloads/dia.
+              </div>
+              <Field label="API Key">
+                <input
+                  className={inputCls}
+                  value={cfg.opensubtitles_api_key}
+                  onChange={(e) => set("opensubtitles_api_key", e.target.value)}
+                  placeholder="cole sua API key aqui"
+                  type="password"
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="Usuário (opcional)">
+                <input
+                  className={inputCls}
+                  value={cfg.opensubtitles_username}
+                  onChange={(e) => set("opensubtitles_username", e.target.value)}
+                  placeholder="seu login no OpenSubtitles"
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="Senha (opcional)">
+                <input
+                  className={inputCls}
+                  value={cfg.opensubtitles_password}
+                  onChange={(e) => set("opensubtitles_password", e.target.value)}
+                  placeholder="••••••••"
+                  type="password"
+                  autoComplete="off"
+                />
+              </Field>
+              {cfg.opensubtitles_api_key && (
+                <div className="mt-1 text-[11px] text-[#a6e3a1]">✓ API Key configurada</div>
+              )}
+            </div>
+          </Panel>
+
+          {/* Atualização */}
+          <UpdatePanel />
 
           {/* Queue Profiles */}
           <QueueProfilesPanel />
