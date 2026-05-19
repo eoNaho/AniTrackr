@@ -666,4 +666,70 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
   .delete("/:id/rules", ({ params }) => {
     db.run(`DELETE FROM anime_rules WHERE anime_id = ?`, [params.id]);
     return { ok: true };
-  }, { params: t.Object({ id: t.String() }) });
+  }, { params: t.Object({ id: t.String() }) })
+
+  // ── Batch Operations ──────────────────────────────────────────────────────
+  // POST /api/library/batch — operações em massa
+  .post("/batch", async ({ body }) => {
+    const { action, animeIds } = body as { action: string; animeIds: string[]; payload?: Record<string, unknown> };
+    const payload = (body as { payload?: Record<string, unknown> }).payload ?? {};
+    if (!animeIds?.length) return { error: "animeIds[] obrigatório" };
+
+    const results: { animeId: string; ok: boolean; detail?: string }[] = [];
+
+    if (action === "queue-missing") {
+      const { enqueueDownloads } = await import("../services/downloader.ts");
+      const { getMissingEpisodes } = await import("../services/scanner.ts");
+      for (const animeId of animeIds) {
+        try {
+          const anime = db.query<{ source_url: string | null; season_number: number }, [string]>(
+            `SELECT source_url, season_number FROM animes WHERE id = ?`
+          ).get(animeId);
+          if (!anime?.source_url) { results.push({ animeId, ok: false, detail: "sem source_url" }); continue; }
+          const existing = new Set(
+            db.query<{ episode_number: number }, [string]>(
+              `SELECT DISTINCT episode_number FROM downloads WHERE anime_id = ? AND status IN ('queued','downloading','completed')`
+            ).all(animeId).map((r) => r.episode_number)
+          );
+          const missingEps = getMissingEpisodes(animeId).filter((ep) => !existing.has(ep));
+          if (!missingEps.length) { results.push({ animeId, ok: true, detail: "nenhum faltando" }); continue; }
+          const jobs = enqueueDownloads(animeId, missingEps, anime.season_number, anime.source_url ?? undefined);
+          results.push({ animeId, ok: true, detail: `${jobs.length} enfileirado(s)` });
+        } catch (e) { results.push({ animeId, ok: false, detail: String(e) }); }
+      }
+    } else if (action === "set-provider") {
+      const provider = payload.provider as string | undefined;
+      if (!provider) return { error: "payload.provider obrigatório" };
+      for (const animeId of animeIds) {
+        db.run(`UPDATE animes SET provider = ? WHERE id = ?`, [provider, animeId]);
+        // Upsert rule
+        db.run(`INSERT INTO anime_rules (anime_id, preferred_provider) VALUES (?,?) ON CONFLICT(anime_id) DO UPDATE SET preferred_provider = excluded.preferred_provider`, [animeId, provider]);
+        results.push({ animeId, ok: true });
+      }
+    } else if (action === "set-monitoring") {
+      const enabled = payload.enabled !== false;
+      for (const animeId of animeIds) {
+        db.run(`UPDATE animes SET is_tracked = ? WHERE id = ?`, [enabled ? 1 : 0, animeId]);
+        results.push({ animeId, ok: true });
+      }
+    } else if (action === "scan") {
+      const { scanAnime } = await import("../services/scanner.ts");
+      for (const animeId of animeIds) {
+        try {
+          const res = await scanAnime(animeId);
+          results.push({ animeId, ok: true, detail: `${res.foundFiles} arquivo(s)` });
+        } catch (e) { results.push({ animeId, ok: false, detail: String(e) }); }
+      }
+    } else {
+      return { error: `Ação desconhecida: ${action}` };
+    }
+
+    const succeeded = results.filter((r) => r.ok).length;
+    return { ok: true, action, total: animeIds.length, succeeded, failed: animeIds.length - succeeded, results };
+  }, {
+    body: t.Object({
+      action: t.String(),
+      animeIds: t.Array(t.String()),
+      payload: t.Optional(t.Record(t.String(), t.Unknown())),
+    }),
+  });

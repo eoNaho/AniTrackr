@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { fetchDashboard, fetchDownloadAnalytics, type DashboardAnime, type DashboardData, type DownloadAnalytics } from "@/lib/api";
+import { FailureIntelligencePanel } from "./failure-intelligence-panel";
 
 interface Props {
   onSelectAnime?: (id: string) => void;
@@ -136,6 +137,7 @@ export function DashboardView({ onSelectAnime }: Props) {
       {analytics && (
         <HealthBlock health={analytics.health} />
       )}
+      <FailureIntelligencePanel />
 
       {totalItems === 0 ? (
         <div className="flex flex-col gap-3 p-6">

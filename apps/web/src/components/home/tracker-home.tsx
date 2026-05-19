@@ -394,13 +394,13 @@ export function TrackerHome() {
         .blink { animation: blink 1s step-end infinite; }
       `}</style>
 
-      <div className="flex h-full flex-col gap-[10px] rounded-md border border-[#45475a] bg-[#0f0f14] p-[10px] shadow-[0_20px_50px_rgba(0,0,0,.8),inset_0_0_100px_rgba(0,0,0,.5)]">
-        <header className="flex shrink-0 flex-col gap-3 border-b border-[#2a2a38] pb-3 text-[14px]">
+      <div className="flex h-full flex-col gap-2 rounded-md border border-[#45475a] bg-[#0f0f14] p-2 shadow-[0_20px_50px_rgba(0,0,0,.8),inset_0_0_100px_rgba(0,0,0,.5)]">
+        <header className="flex shrink-0 flex-col gap-2 border-b border-[#2a2a38] pb-2 text-[13px]">
           <div className="font-extrabold tracking-[1px] text-[#cba6f7] drop-shadow-[0_0_4px_rgba(203,166,247,.35)]">
             ANITRACKR-DOWNLOAD-TRACKER v2.0.1<span className="blink ml-1">_</span>
           </div>
 
-          <nav className="order-3 flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <nav className="order-3 flex gap-1 overflow-x-auto pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {(
               [
                 ["dashboard", "início"],
@@ -417,7 +417,7 @@ export function TrackerHome() {
               <button
                 key={m}
                 onClick={() => setMode(m)}
-                className={`border px-3 py-[7px] text-[11px] font-bold uppercase tracking-[0.12em] ${
+                className={`border px-2 py-[5px] text-[10px] font-bold uppercase tracking-[0.1em] whitespace-nowrap ${
                   mode === m
                     ? "border-[#cba6f7] bg-[#cba6f7] text-[#0f0f14]"
                     : "border-[#45475a] text-[#6c7086] hover:border-[#cba6f7] hover:text-[#cba6f7]"
@@ -428,15 +428,15 @@ export function TrackerHome() {
             ))}
           </nav>
 
-          <div className="order-2 flex flex-wrap items-center gap-2 rounded-sm border border-[#2a2a38] bg-[#0b0b11] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-[#6c7086]">
+          <div className="order-2 flex flex-wrap items-center gap-1.5 rounded-sm border border-[#2a2a38] bg-[#0b0b11] px-2 py-1.5 text-[10px] uppercase tracking-[0.1em] text-[#6c7086]">
             {providerBadges.map((p) => (
               <span key={p} className="border border-[#232332] px-[6px] py-[2px] uppercase">[{p}]</span>
             ))}
-            <span className="mr-2">
+            <span className="mr-1.5">
               API: <span className={`font-bold ${statusColor}`}>{effectiveBackendStatus}</span>
               {backendHealth ? ` v${backendHealth.version}` : ""}
             </span>
-            <span className="mr-2">
+            <span className="mr-1.5">
               DL: <span className={`font-bold uppercase ${streamLabelClass}`}>{streamLabel}</span>
             </span>
             <span>

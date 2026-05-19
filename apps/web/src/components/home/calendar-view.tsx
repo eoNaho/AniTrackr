@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { fetchCalendar, type CalendarEntry } from "@/lib/api";
+import { fetchCalendar, enqueueNextEpisode, silenceRadarAnime, type CalendarEntry } from "@/lib/api";
 import { Panel, TuiButton, TuiEmpty, TuiInfoBox, TuiSection } from "./ui";
 
 export function CalendarView() {
@@ -164,15 +164,40 @@ function CalendarSection({
 }
 
 function CalendarCard({ entry }: { entry: CalendarEntry }) {
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const autoEligible = entry.is_library && entry.source_url && entry.auto_download === 1;
+  const canEnqueue = entry.is_library && !!entry.source_url;
   const statusLabel =
     entry.watch_status === "watching" ? "acompanhando"
     : entry.downloaded_count > 0 ? "baixado"
     : entry.is_library ? "na biblioteca"
     : "novo";
 
+  async function handleEnqueue() {
+    if (!canEnqueue) return;
+    setBusy(true);
+    try {
+      const res = await enqueueNextEpisode(entry.id);
+      setActionStatus(res.queued > 0 ? `Ep ${res.episode} enfileirado` : "Já na fila");
+    } catch (e) { setActionStatus(`Erro: ${(e as Error).message.slice(0, 40)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function handleSilence() {
+    if (!entry.is_library) return;
+    setBusy(true);
+    try {
+      await silenceRadarAnime(entry.id, 7);
+      setActionStatus("Silenciado por 7 dias");
+    } catch (e) { setActionStatus(`Erro: ${(e as Error).message.slice(0, 40)}`); }
+    finally { setBusy(false); }
+  }
+
   return (
-    <div className="flex items-center gap-3 border border-[#45475a] bg-[#11111a] p-3">
+    <div className="flex flex-col border border-[#45475a] bg-[#11111a]">
+    <div className="flex items-center gap-3 p-3">
       {entry.poster_url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -214,6 +239,33 @@ function CalendarCard({ entry }: { entry: CalendarEntry }) {
           ) : null}
         </div>
       </div>
+    </div>
+    {/* Actions row */}
+    {entry.is_library && (
+      <div className="flex items-center gap-2 border-t border-[#1a1a2e] px-3 py-2">
+        {canEnqueue && (
+          <button
+            onClick={() => void handleEnqueue()}
+            disabled={busy}
+            className="border border-[#45475a] px-2 py-1 text-[10px] font-bold uppercase text-[#cba6f7] hover:bg-[#cba6f7] hover:text-[#0f0f14] disabled:opacity-40"
+          >
+            {busy ? "..." : "▶ enfileirar agora"}
+          </button>
+        )}
+        <button
+          onClick={() => void handleSilence()}
+          disabled={busy}
+          className="border border-[#45475a] px-2 py-1 text-[10px] uppercase text-[#6c7086] hover:border-[#f38ba8] hover:text-[#f38ba8] disabled:opacity-40"
+        >
+          silenciar 7d
+        </button>
+        {actionStatus && (
+          <span className={`text-[10px] ${actionStatus.startsWith("Erro") ? "text-[#f38ba8]" : "text-[#a6e3a1]"}`}>
+            {actionStatus}
+          </span>
+        )}
+      </div>
+    )}
     </div>
   );
 }

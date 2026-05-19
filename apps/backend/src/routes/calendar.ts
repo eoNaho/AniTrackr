@@ -1,6 +1,8 @@
 import Elysia, { t } from "elysia";
 import db from "../db/index.ts";
 import { getUpcomingAiringSchedule } from "../services/anilist.ts";
+import { enqueueDownloads } from "../services/downloader.ts";
+import { logger } from "../utils/logger.ts";
 
 type CalendarEntry = {
   id: string;
@@ -129,4 +131,48 @@ export const calendarRoutes = new Elysia({ prefix: "/calendar" })
     return { range, priority, discover, recentlyDetected };
   }, {
     query: t.Object({ range: t.Optional(t.String()) }),
-  });
+  })
+
+  // POST /api/calendar/silence/:animeId — silencia do radar por N dias
+  .post("/silence/:animeId", ({ params, body }) => {
+    const days = Math.min(30, Math.max(1, (body as { days?: number }).days ?? 7));
+    const until = new Date(Date.now() + days * 86400_000).toISOString();
+    const updated = db.run(`UPDATE animes SET radar_silenced_until = ? WHERE id = ?`, [until, params.animeId]);
+    if (!updated.changes) return new Response(JSON.stringify({ error: "Anime não encontrado" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    logger.info("radar", `silenciado: ${params.animeId} até ${until.slice(0, 10)}`);
+    return { ok: true, silencedUntil: until };
+  }, {
+    params: t.Object({ animeId: t.String() }),
+    body: t.Optional(t.Object({ days: t.Optional(t.Number()) })),
+  })
+
+  // POST /api/calendar/unsilence/:animeId
+  .post("/unsilence/:animeId", ({ params }) => {
+    db.run(`UPDATE animes SET radar_silenced_until = NULL WHERE id = ?`, [params.animeId]);
+    return { ok: true };
+  }, { params: t.Object({ animeId: t.String() }) })
+
+  // POST /api/calendar/enqueue-next/:animeId — enfileira o próximo episódio pendente
+  .post("/enqueue-next/:animeId", ({ params }) => {
+    const anime = db.query<{
+      id: string; title: string; provider: string;
+      source_url: string | null; downloaded_count: number; season_number: number;
+    }, [string]>(
+      `SELECT id, title, provider, source_url, downloaded_count, season_number FROM animes WHERE id = ?`
+    ).get(params.animeId);
+    if (!anime) return new Response(JSON.stringify({ error: "Anime não encontrado" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    if (!anime.source_url) return { error: "Anime sem source_url configurado", queued: 0 };
+
+    // Próximo episódio = primeiro não baixado e não em fila
+    const existing = new Set(
+      db.query<{ episode_number: number }, [string]>(
+        `SELECT DISTINCT episode_number FROM downloads WHERE anime_id = ? AND status IN ('queued','downloading','completed')`
+      ).all(anime.id).map((r) => r.episode_number)
+    );
+    const nextEp = (anime.downloaded_count ?? 0) + 1;
+    const targetEp = existing.has(nextEp) ? nextEp + 1 : nextEp;
+
+    const jobs = enqueueDownloads(anime.id, [targetEp], anime.season_number, anime.source_url);
+    logger.info("radar", `enfileirado via radar: "${anime.title}" ep ${targetEp}`);
+    return { ok: true, queued: jobs.length, episode: targetEp };
+  }, { params: t.Object({ animeId: t.String() }) });

@@ -940,3 +940,75 @@ export const deleteQueueProfile = (id: string) =>
     `${getBackendUrl()}/api/queue-profiles/${id}`,
     { method: "DELETE" }
   );
+
+// ── Failure Intelligence ──────────────────────────────────────────────────────
+
+export type FailureCategory = "auth_error" | "source_broken" | "network_timeout" | "provider_drift" | "invalid_file" | "unknown";
+
+export type ClassifiedFailure = {
+  id: string;
+  anime_id: string;
+  anime_title: string;
+  episode_number: number;
+  season: number;
+  error_msg: string | null;
+  last_error_code: string | null;
+  provider: string;
+  completed_at: string | null;
+  attempt_count: number;
+  classification: {
+    category: FailureCategory;
+    cause: string;
+    action: string;
+    severity: "low" | "medium" | "high";
+  };
+};
+
+export type FailuresResponse = {
+  window: string;
+  total: number;
+  summary: Record<string, { count: number; severity: string }>;
+  failures: ClassifiedFailure[];
+};
+
+export const fetchDownloadFailures = (window: "1d" | "7d" = "1d") =>
+  requestJson<FailuresResponse>(`/api/downloads/failures?window=${window}`);
+
+// ── Release Radar actions ─────────────────────────────────────────────────────
+
+export const silenceRadarAnime = (animeId: string, days = 7) =>
+  requestJsonWithBodyError<{ ok: boolean; silencedUntil: string }>(
+    `${getBackendUrl()}/api/calendar/silence/${animeId}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days }) }
+  );
+
+export const unsilenceRadarAnime = (animeId: string) =>
+  requestJsonWithBodyError<{ ok: boolean }>(
+    `${getBackendUrl()}/api/calendar/unsilence/${animeId}`,
+    { method: "POST" }
+  );
+
+export const enqueueNextEpisode = (animeId: string) =>
+  requestJsonWithBodyError<{ ok: boolean; queued: number; episode: number }>(
+    `${getBackendUrl()}/api/calendar/enqueue-next/${animeId}`,
+    { method: "POST" }
+  );
+
+// ── Batch Operations ──────────────────────────────────────────────────────────
+
+export type BatchAction = "queue-missing" | "set-provider" | "set-monitoring" | "scan";
+
+export type BatchResult = {
+  ok: boolean;
+  action: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: { animeId: string; ok: boolean; detail?: string }[];
+};
+
+export const batchLibraryAction = (action: BatchAction, animeIds: string[], payload?: Record<string, unknown>) =>
+  requestJsonWithBodyError<BatchResult>(
+    `${getBackendUrl()}/api/library/batch`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, animeIds, payload }) }
+  );

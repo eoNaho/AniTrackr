@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import type { DownloadJob } from "@/lib/api";
-import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan } from "@/lib/api";
+import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan, batchLibraryAction } from "@/lib/api";
 import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, ConfirmDialog, generateBar, statusBadgeClass, statusColor } from "./ui";
 import { EpisodeList } from "./episode-list";
 import { AnimeRulesPanel } from "./anime-rules-panel";
@@ -38,6 +38,8 @@ function fmtSpeed(kbps: number) {
   if (kbps >= 1024) return `${(kbps / 1024).toFixed(1)} MB/s`;
   return `${Math.round(kbps)} KB/s`;
 }
+
+const batchBtn = "border border-[#45475a] px-2 py-0.5 text-[#bac2de] hover:border-[#cba6f7] hover:text-[#cba6f7] disabled:opacity-40";
 
 function fmtSize(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -81,6 +83,14 @@ export function LibraryView({
   const [queueConfirmAction, setQueueConfirmAction] = useState<"cancel-all" | "clear-monitor" | null>(null);
   const [queueConfirmBusy, setQueueConfirmBusy] = useState(false);
 
+  // Batch multi-select
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchStatus, setBatchStatus] = useState<string | null>(null);
+  const [showProviderSelect, setShowProviderSelect] = useState(false);
+  const [batchProvider, setBatchProvider] = useState("animefire");
+  const [isQueueMonitorCollapsed, setIsQueueMonitorCollapsed] = useState(false);
+
   const filteredAnimes = useMemo(() => {
     const q = filter.toLowerCase();
     const list = q
@@ -98,6 +108,39 @@ export function LibraryView({
     }
     return list;
   }, [animes, filter, sortBy]);
+
+  // Batch handlers
+  async function handleBatch(action: "queue-missing" | "set-provider" | "set-monitoring" | "scan", payload?: Record<string, unknown>) {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    setBatchBusy(true);
+    setBatchStatus(null);
+    try {
+      const res = await batchLibraryAction(action, ids, payload);
+      setBatchStatus(`${res.succeeded}/${res.total} ok`);
+      if (action !== "set-monitoring") void onRefresh();
+    } catch (e) {
+      setBatchStatus(`Erro: ${(e as Error).message.slice(0, 50)}`);
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredAnimes.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredAnimes.map((a) => a.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const selected = animes[selectedIndex < animes.length ? selectedIndex : 0] ?? null;
   const progress = selected
@@ -185,7 +228,11 @@ export function LibraryView({
   }
 
   return (
-  <div className="grid h-full w-full gap-[14px] overflow-hidden lg:grid-cols-[45%_1fr] lg:grid-rows-[1fr_300px]">
+  <div
+    className={`grid h-full w-full gap-[14px] overflow-hidden lg:grid-cols-[45%_1fr] ${
+      isQueueMonitorCollapsed ? "lg:grid-rows-[1fr_58px]" : "lg:grid-rows-[1fr_300px]"
+    }`}
+  >
       <Panel title="Downloads :: Biblioteca Local" focused className="min-h-0">
         <div className="grid grid-cols-2 gap-2 border-b border-dashed border-[#45475a] p-3 md:grid-cols-4">
           <StatBox label="Queued" value={queuedCount} command="queue.len()" />
@@ -213,10 +260,49 @@ export function LibraryView({
             <option value="year">Ano</option>
           </select>
         </div>
-        <div className="flex items-center justify-between border-b border-dashed border-[#45475a] px-5 py-2 text-[11px] uppercase text-[#6c7086]">
-          <span>Titulo {filter && <span className="text-[#cba6f7]">({filteredAnimes.length}/{animes.length})</span>}</span>
+        <div className="flex items-center justify-between border-b border-dashed border-[#45475a] px-3 py-2 text-[11px] uppercase text-[#6c7086]">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selectedIds.size > 0 && selectedIds.size === filteredAnimes.length}
+              ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < filteredAnimes.length; }}
+              onChange={toggleSelectAll}
+              className="accent-[#cba6f7]"
+            />
+            <span>Titulo {filter && <span className="text-[#cba6f7]">({filteredAnimes.length}/{animes.length})</span>}</span>
+          </div>
           <span className="hidden md:block">Status · Progresso · Eps</span>
         </div>
+
+        {/* Batch actions bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#cba6f7]/30 bg-[#cba6f7]/5 px-3 py-2 text-[11px]">
+            <span className="font-bold text-[#cba6f7]">{selectedIds.size} selecionado{selectedIds.size !== 1 ? "s" : ""}</span>
+            <button onClick={() => void handleBatch("queue-missing")} disabled={batchBusy} className={batchBtn}>queue missing</button>
+            <button onClick={() => void handleBatch("scan")} disabled={batchBusy} className={batchBtn}>rescan</button>
+            <button onClick={() => void handleBatch("set-monitoring", { enabled: false })} disabled={batchBusy} className={batchBtn}>pausar</button>
+            <button onClick={() => void handleBatch("set-monitoring", { enabled: true })} disabled={batchBusy} className={batchBtn}>retomar</button>
+            <div className="flex items-center gap-1">
+              {showProviderSelect ? (
+                <>
+                  <select value={batchProvider} onChange={(e) => setBatchProvider(e.target.value)} className="border border-[#45475a] bg-[#0f0f14] px-1 py-0.5 text-[11px] text-[#e0e0ed] outline-none">
+                    {["animefire","goyabu","animedrive","superflix","dattebayo","allanime","nineanime"].map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => { void handleBatch("set-provider", { provider: batchProvider }); setShowProviderSelect(false); }} disabled={batchBusy} className={batchBtn}>ok</button>
+                  <button onClick={() => setShowProviderSelect(false)} className={batchBtn}>✕</button>
+                </>
+              ) : (
+                <button onClick={() => setShowProviderSelect(true)} disabled={batchBusy} className={batchBtn}>trocar provider</button>
+              )}
+            </div>
+            <button onClick={() => { setSelectedIds(new Set()); setBatchStatus(null); }} className="ml-auto text-[#6c7086] hover:text-[#e0e0ed]">✕ cancelar</button>
+            {batchStatus && (
+              <span className={`text-[11px] ${batchStatus.startsWith("Erro") ? "text-[#f38ba8]" : "text-[#a6e3a1]"}`}>{batchStatus}</span>
+            )}
+          </div>
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto py-1">
           {animes.length === 0 ? (
             <div className="px-4 py-6 text-[13px] text-[#6c7086]">
@@ -228,13 +314,23 @@ export function LibraryView({
             filteredAnimes.map((anime) => {
               const realIdx = animes.findIndex((a) => a.id === anime.id);
               return (
-                <AnimeRow
-                  key={anime.id}
-                  anime={anime}
-                  index={realIdx}
-                  selected={realIdx === selectedIndex}
-                  onSelect={() => onSelect(realIdx)}
-                />
+                <div key={anime.id} className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(anime.id)}
+                    onChange={() => toggleSelect(anime.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="ml-2 shrink-0 accent-[#cba6f7]"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <AnimeRow
+                      anime={anime}
+                      index={realIdx}
+                      selected={realIdx === selectedIndex}
+                      onSelect={() => onSelect(realIdx)}
+                    />
+                  </div>
+                </div>
               );
             })
           )}
@@ -429,40 +525,60 @@ export function LibraryView({
         )}
       </Panel>
 
-      <Panel title={`Queue Monitor :: ${streamText}`} className="lg:col-span-2 min-h-0">
+      <Panel
+        title={`Queue Monitor :: ${streamText}`}
+        className={`lg:col-span-2 ${isQueueMonitorCollapsed ? "h-[58px] min-h-0" : "min-h-0"}`}
+      >
         <div className="flex flex-1 min-h-0 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-dashed border-[#45475a] px-4 py-2 text-[11px]">
-          <span className={`font-bold uppercase ${streamClass}`}>{streamText}</span>
-          <span className="text-[#6c7086]">active: {activeDownloads.length}</span>
-          <span className="text-[#6c7086]">failed/cancelled: {failedDownloads.length}</span>
-          <div className="ml-auto flex flex-wrap gap-1">
+          {!isQueueMonitorCollapsed ? (
+            <>
+              <span className={`font-bold uppercase ${streamClass}`}>{streamText}</span>
+              <span className="text-[#6c7086]">active: {activeDownloads.length}</span>
+              <span className="text-[#6c7086]">failed/cancelled: {failedDownloads.length}</span>
+            </>
+          ) : (
+            <span className="text-[#6c7086]">Queue Monitor fechado</span>
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-1">
             <button
-              onClick={onRefreshDownloads}
-              className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
+              onClick={() => setIsQueueMonitorCollapsed((prev) => !prev)}
+              className="border border-[#45475a] px-2 py-1 text-[#bac2de] hover:bg-[#bac2de] hover:text-[#0f0f14]"
             >
-              refresh
+              {isQueueMonitorCollapsed ? "abrir" : "fechar painel"}
             </button>
-            <button
-              onClick={onRetryFailed}
-              className="border border-[#45475a] px-2 py-1 text-[#f9e2af] hover:bg-[#f9e2af] hover:text-[#0f0f14]"
-            >
-              retry failed
-            </button>
-            <button
-              onClick={() => setQueueConfirmAction("cancel-all")}
-              className="border border-[#45475a] px-2 py-1 text-[#f38ba8] hover:bg-[#f38ba8] hover:text-[#0f0f14]"
-            >
-              cancel all
-            </button>
-            <button
-              onClick={() => setQueueConfirmAction("clear-monitor")}
-              className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
-            >
-              clear monitor
-            </button>
+            {!isQueueMonitorCollapsed && (
+              <>
+                <button
+                  onClick={onRefreshDownloads}
+                  className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
+                >
+                  refresh
+                </button>
+                <button
+                  onClick={onRetryFailed}
+                  className="border border-[#45475a] px-2 py-1 text-[#f9e2af] hover:bg-[#f9e2af] hover:text-[#0f0f14]"
+                >
+                  retry failed
+                </button>
+                <button
+                  onClick={() => setQueueConfirmAction("cancel-all")}
+                  className="border border-[#45475a] px-2 py-1 text-[#f38ba8] hover:bg-[#f38ba8] hover:text-[#0f0f14]"
+                >
+                  cancel all
+                </button>
+                <button
+                  onClick={() => setQueueConfirmAction("clear-monitor")}
+                  className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
+                >
+                  clear monitor
+                </button>
+              </>
+            )}
           </div>
         </div>
 
+        {!isQueueMonitorCollapsed && (
         <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain">
           {downloads.length === 0 ? (
             <div className="px-4 py-6 text-[12px] text-[#6c7086]">
@@ -526,6 +642,7 @@ export function LibraryView({
             </table>
           )}
         </div>
+        )}
         </div>
       </Panel>
       <ConfirmDialog

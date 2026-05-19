@@ -14,6 +14,45 @@ import { getMissingEpisodes } from "../services/scanner.ts";
 import { getEpisodesWithFallback, type Provider } from "../services/provider-chain.ts";
 import { logger } from "../utils/logger.ts";
 
+// ── Failure Intelligence ──────────────────────────────────────────────────────
+
+type FailureCategory =
+  | "auth_error"
+  | "source_broken"
+  | "network_timeout"
+  | "provider_drift"
+  | "invalid_file"
+  | "unknown";
+
+type FailureClassification = {
+  category: FailureCategory;
+  cause: string;
+  action: string;
+  severity: "low" | "medium" | "high";
+};
+
+function classifyFailure(errorMsg: string | null, errorCode: string | null): FailureClassification {
+  const msg = (errorMsg ?? "").toLowerCase();
+  const code = (errorCode ?? "").toLowerCase();
+
+  if (code.includes("403") || code.includes("401") || msg.includes("forbidden") || msg.includes("unauthorized") || msg.includes("anti-bot")) {
+    return { category: "auth_error", cause: "Provider bloqueou acesso (403/401)", action: "Tentar provider alternativo ou aguardar liberação", severity: "high" };
+  }
+  if (msg.includes("wixmp") || msg.includes("expired") || msg.includes("invalid url") || code.includes("404") || msg.includes("stream not found") || msg.includes("source unavailable")) {
+    return { category: "source_broken", cause: "Stream expirado ou fonte indisponível", action: "Retry automático com fonte atualizada via fallback", severity: "medium" };
+  }
+  if (msg.includes("timeout") || msg.includes("econnreset") || msg.includes("etimedout") || msg.includes("connection refused") || msg.includes("network")) {
+    return { category: "network_timeout", cause: "Falha de rede ou timeout na conexão", action: "Retry automático em breve — verificar conectividade se persistir", severity: "low" };
+  }
+  if (msg.includes("yt-dlp") || msg.includes("extraction") || msg.includes("no video formats") || msg.includes("parse") || msg.includes("unsupported url")) {
+    return { category: "provider_drift", cause: "Provider mudou estrutura — yt-dlp não conseguiu extrair", action: "Atualizar yt-dlp ou trocar provider nas configurações", severity: "high" };
+  }
+  if (msg.includes("invalid") || msg.includes("corrupt") || msg.includes("too small") || msg.includes("zero-byte")) {
+    return { category: "invalid_file", cause: "Arquivo baixado inválido ou corrompido", action: "Deletar arquivo e tentar novamente", severity: "medium" };
+  }
+  return { category: "unknown", cause: "Erro não classificado automaticamente", action: "Verificar logs completos para diagnóstico manual", severity: "medium" };
+}
+
 type SSEClient = { send: (event: string, payload: unknown) => void; close: () => void };
 const sseClients = new Set<SSEClient>();
 
@@ -232,6 +271,42 @@ export const downloadRoutes = new Elysia()
       downloadsPerDay, totals, byProvider, topAnimes,
       health: { successRate24h, retryWaitCount, topErrors, failedByProvider, window24h: health24h },
     };
+  })
+
+  .get("/downloads/failures", ({ query }) => {
+    const days = query.window === "7d" ? 7 : 1;
+    const rows = db.query<{
+      id: string; anime_id: string; anime_title: string;
+      episode_number: number; season: number;
+      error_msg: string | null; last_error_code: string | null;
+      provider: string; completed_at: string | null; attempt_count: number;
+    }, []>(`
+      SELECT d.id, d.anime_id, a.title as anime_title, d.episode_number, d.season,
+             d.error_msg, d.last_error_code, d.provider, d.completed_at, d.attempt_count
+      FROM downloads d
+      JOIN animes a ON a.id = d.anime_id
+      WHERE d.status = 'failed'
+        AND (d.completed_at IS NULL OR d.completed_at > datetime('now', '-${days} days'))
+      ORDER BY d.completed_at DESC
+      LIMIT 100
+    `).all();
+
+    const classified = rows.map((r) => ({
+      ...r,
+      classification: classifyFailure(r.error_msg, r.last_error_code),
+    }));
+
+    // Group by category for summary
+    const summary: Record<string, { count: number; severity: string }> = {};
+    for (const item of classified) {
+      const cat = item.classification.category;
+      if (!summary[cat]) summary[cat] = { count: 0, severity: item.classification.severity };
+      summary[cat].count++;
+    }
+
+    return { window: `${days}d`, total: classified.length, summary, failures: classified };
+  }, {
+    query: t.Object({ window: t.Optional(t.String()) }),
   })
 
   .post("/downloads/:id/retry", ({ params }) => {

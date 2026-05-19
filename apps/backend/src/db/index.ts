@@ -149,6 +149,7 @@ ensureColumn("anime_rules", "skip_fillers", "skip_fillers INTEGER DEFAULT 0");
 ensureColumn("anime_rules", "skip_recaps", "skip_recaps INTEGER DEFAULT 0");
 ensureColumn("anime_rules", "notes", "notes TEXT");
 ensureColumn("downloads", "enqueued_at", "enqueued_at TEXT");
+ensureColumn("animes", "radar_silenced_until", "radar_silenced_until TEXT");
 
 function syncConfigDefault(key: string, nextValue: string, legacyValues: string[]) {
   const row = db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key);
