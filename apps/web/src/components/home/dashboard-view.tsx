@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { fetchDashboard, fetchDownloadAnalytics, type DashboardAnime, type DashboardData, type DownloadAnalytics } from "@/lib/api";
 
 interface Props {
@@ -50,9 +50,11 @@ function StatsBar({ analytics }: { analytics: DownloadAnalytics }) {
   const { totals, byProvider, downloadsPerDay } = analytics;
   const spark = sparkline(fillDays(downloadsPerDay, 14));
   const topProvider = byProvider[0]?.provider ?? "—";
-  const thisWeek = downloadsPerDay
-    .filter((d) => new Date(d.date) >= new Date(Date.now() - 7 * 86400_000))
-    .reduce((s, d) => s + d.count, 0);
+  // Backend retorna últimos 14 dias em ASC — slice(-7) dá a semana atual sem Date.now()
+  const thisWeek = useMemo(
+    () => downloadsPerDay.slice(-7).reduce((s, d) => s + d.count, 0),
+    [downloadsPerDay]
+  );
 
   return (
     <section className="flex flex-wrap gap-4 border border-[#2a2a38] bg-[#0b0b11] px-4 py-3 text-[11px]">
@@ -93,10 +95,10 @@ export function DashboardView({ onSelectAnime }: Props) {
 
   useEffect(() => {
     let active = true;
-    setError(null);
     Promise.all([fetchDashboard(), fetchDownloadAnalytics().catch(() => null)])
       .then(([dashboard, stats]) => {
         if (!active) return;
+        setError(null);
         setData(dashboard);
         setAnalytics(stats);
       })
@@ -131,6 +133,9 @@ export function DashboardView({ onSelectAnime }: Props) {
       {analytics && analytics.totals.total_count > 0 && (
         <StatsBar analytics={analytics} />
       )}
+      {analytics && (
+        <HealthBlock health={analytics.health} />
+      )}
 
       {totalItems === 0 ? (
         <div className="flex flex-col gap-3 p-6">
@@ -159,6 +164,78 @@ export function DashboardView({ onSelectAnime }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+// ── HealthBlock ───────────────────────────────────────────────────────────────
+
+function HealthBlock({ health }: { health: DownloadAnalytics["health"] }) {
+  const { successRate24h, retryWaitCount, topErrors, failedByProvider, window24h } = health;
+
+  const rateColor =
+    successRate24h === null ? "text-[#6c7086]"
+    : successRate24h >= 90 ? "text-[#a6e3a1]"
+    : successRate24h >= 70 ? "text-[#f9e2af]"
+    : "text-[#f38ba8]";
+
+  if (window24h.total === 0 && retryWaitCount === 0 && topErrors.length === 0) return null;
+
+  return (
+    <section className="border border-[#2a2a38] bg-[#0b0b11] px-4 py-3 text-[11px]">
+      <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#45475a]">SAÚDE DOS DOWNLOADS</div>
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
+        {/* Taxa de sucesso 24h */}
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[#45475a] uppercase tracking-widest">SUCESSO 24H</span>
+          <span className={`font-bold text-base ${rateColor}`}>
+            {successRate24h !== null ? `${successRate24h}%` : "—"}
+            <span className="ml-1 text-[10px] font-normal text-[#6c7086]">
+              ({window24h.completed} ok / {window24h.failed} falha)
+            </span>
+          </span>
+        </div>
+
+        {/* retry_wait */}
+        {retryWaitCount > 0 && (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[#45475a] uppercase tracking-widest">RETRY WAIT</span>
+            <span className="font-bold text-base text-[#fab387]">
+              {retryWaitCount}
+              <span className="ml-1 text-[10px] font-normal text-[#6c7086]">jobs aguardando</span>
+            </span>
+          </div>
+        )}
+
+        {/* Top erros */}
+        {topErrors.length > 0 && (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[#45475a] uppercase tracking-widest">TOP ERROS (7D)</span>
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+              {topErrors.map((e) => (
+                <span key={e.code} className="text-[#f38ba8]">
+                  <span className="font-bold">{e.code}</span>
+                  <span className="text-[#6c7086]"> ×{e.count}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Provider com mais falhas */}
+        {failedByProvider.length > 0 && (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[#45475a] uppercase tracking-widest">FALHAS / PROVIDER</span>
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+              {failedByProvider.map((p) => (
+                <span key={p.provider} className="text-[#6c7086]">
+                  <span className="text-[#bac2de]">{p.provider}</span> ×{p.count}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

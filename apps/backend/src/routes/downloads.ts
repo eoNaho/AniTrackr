@@ -187,7 +187,51 @@ export const downloadRoutes = new Elysia()
       LIMIT 5
     `).all();
 
-    return { downloadsPerDay, totals, byProvider, topAnimes };
+    // ── health ────────────────────────────────────────────────────────────────
+    const health24h = db.query<{ completed: number; failed: number; total: number }, []>(`
+      SELECT
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
+        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed,
+        COUNT(*) as total
+      FROM downloads
+      WHERE started_at IS NOT NULL
+        AND started_at > datetime('now', '-24 hours')
+    `).get() ?? { completed: 0, failed: 0, total: 0 };
+
+    const retryWaitCount = db.query<{ count: number }, []>(
+      `SELECT COUNT(*) as count FROM downloads WHERE status = 'retry_wait'`
+    ).get()?.count ?? 0;
+
+    const topErrors = db.query<{ code: string; count: number }, []>(`
+      SELECT last_error_code as code, COUNT(*) as count
+      FROM downloads
+      WHERE status = 'failed'
+        AND last_error_code IS NOT NULL
+        AND last_error_code != ''
+        AND started_at > datetime('now', '-7 days')
+      GROUP BY last_error_code
+      ORDER BY count DESC
+      LIMIT 5
+    `).all();
+
+    const failedByProvider = db.query<{ provider: string; count: number }, []>(`
+      SELECT provider, COUNT(*) as count
+      FROM downloads
+      WHERE status = 'failed'
+        AND started_at > datetime('now', '-7 days')
+      GROUP BY provider
+      ORDER BY count DESC
+      LIMIT 5
+    `).all();
+
+    const successRate24h = health24h.total > 0
+      ? Math.round((health24h.completed / health24h.total) * 100)
+      : null;
+
+    return {
+      downloadsPerDay, totals, byProvider, topAnimes,
+      health: { successRate24h, retryWaitCount, topErrors, failedByProvider, window24h: health24h },
+    };
   })
 
   .post("/downloads/:id/retry", ({ params }) => {

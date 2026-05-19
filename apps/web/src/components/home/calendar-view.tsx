@@ -14,20 +14,20 @@ export function CalendarView() {
 
   useEffect(() => {
     let active = true;
-    setError(null);
     fetchCalendar(range)
       .then((d) => {
         if (!active) return;
+        setError(null);
         setPriority(d.priority);
         setDiscover(d.discover);
         setRecentlyDetected(d.recentlyDetected);
       })
       .catch((err) => {
         if (!active) return;
+        setError((err as Error).message);
         setPriority([]);
         setDiscover([]);
         setRecentlyDetected([]);
-        setError((err as Error).message);
       })
       .finally(() => {
         if (!active) return;
@@ -51,7 +51,7 @@ export function CalendarView() {
           <div>
             <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#cba6f7]">release.timeline()</div>
             <p className="mt-1 text-[12px] text-[#6c7086]">
-              Mistura biblioteca local com lancamentos gerais e destaca o que importa primeiro.
+              Mistura biblioteca local com lançamentos gerais e destaca o que importa primeiro.
             </p>
           </div>
 
@@ -72,7 +72,7 @@ export function CalendarView() {
                 }}
                 variant={range === item ? "primary" : "default"}
               >
-                {item === "week" ? "esta semana" : "este mes"}
+                {item === "week" ? "esta semana" : "este mês"}
               </TuiButton>
             ))}
           </div>
@@ -80,12 +80,12 @@ export function CalendarView() {
           {recentlyDetected.length > 0 ? (
             <TuiSection
               title="Auto Download"
-              subtitle={`${recentlyDetected.length} episodio(s) entraram na fila automaticamente nos ultimos 7 dias.`}
+              subtitle={`${recentlyDetected.length} episódio(s) entraram na fila automaticamente nos últimos 7 dias.`}
             >
               <div className="px-4 py-3 text-[12px] text-[#a6e3a1]">scheduler.enqueue() confirmed</div>
             </TuiSection>
           ) : (
-            <TuiEmpty>Sem episodios recentes detectados pelo auto-download.</TuiEmpty>
+            <TuiEmpty>Sem episódios recentes detectados pelo auto-download.</TuiEmpty>
           )}
         </div>
       </Panel>
@@ -98,23 +98,23 @@ export function CalendarView() {
             <TuiEmpty>{error}</TuiEmpty>
           ) : isEmpty ? (
             <TuiEmpty>
-              Nenhum lancamento encontrado para {range === "week" ? "esta semana" : "este mes"}.
+              Nenhum lançamento encontrado para {range === "week" ? "esta semana" : "este mês"}.
             </TuiEmpty>
           ) : (
             <>
               <CalendarSection
                 title="Prioridade Da Biblioteca"
-                description="Titulos ja salvos aparecem primeiro e recebem mais peso quando fazem parte do fluxo ativo."
+                description="Títulos já salvos aparecem primeiro e recebem mais peso quando fazem parte do fluxo ativo."
                 dates={priorityDates}
                 grouped={priorityGrouped}
-                emptyMessage="Nada da sua biblioteca esta previsto nesse periodo."
+                emptyMessage="Nada da sua biblioteca está previsto nesse período."
               />
               <CalendarSection
                 title="Descoberta Geral"
-                description="Lancamentos em exibicao mesmo quando ainda estao fora da biblioteca."
+                description="Lançamentos em exibição mesmo quando ainda estão fora da biblioteca."
                 dates={discoverDates}
                 grouped={discoverGrouped}
-                emptyMessage="Nenhum lancamento adicional encontrado nesse periodo."
+                emptyMessage="Nenhum lançamento adicional encontrado nesse período."
               />
             </>
           )}

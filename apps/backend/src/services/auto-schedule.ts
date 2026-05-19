@@ -79,28 +79,59 @@ async function checkAndSchedule() {
   }
 
   // 2. Filtra apenas séries com episódio próximo ou sem data conhecida
-  const toCheck = releasing.filter((anime) => {
-    if (!anime.next_release) return true; // data desconhecida → sempre verifica
-    const releaseMs = new Date(anime.next_release).getTime();
-    return releaseMs <= now + RELEASE_WINDOW_MS; // já lançou ou vai lançar em ≤30 min
-  });
+  type SkipReason = "out_of_window" | "no_source_url";
+  const skipCounts: Record<SkipReason, number> = { out_of_window: 0, no_source_url: 0 };
+  const toCheck: typeof releasing = [];
 
-  if (!toCheck.length) return;
-  logger.info("auto-schedule", `verificando provider para ${toCheck.length} série(s) com episódio próximo`);
+  for (const anime of releasing) {
+    if (!anime.source_url) {
+      skipCounts.no_source_url++;
+      logger.debug("auto-schedule", `skip "${anime.title}": sem source_url`);
+      continue;
+    }
+    if (anime.next_release) {
+      const releaseMs = new Date(anime.next_release).getTime();
+      if (releaseMs > now + RELEASE_WINDOW_MS) {
+        skipCounts.out_of_window++;
+        const minUntil = Math.round((releaseMs - now) / 60_000);
+        logger.debug("auto-schedule", `skip "${anime.title}": próximo ep em ${minUntil}min`);
+        continue;
+      }
+    }
+    toCheck.push(anime);
+  }
+
+  // Resumo de skips
+  const skipParts = (Object.entries(skipCounts) as [SkipReason, number][])
+    .filter(([, v]) => v > 0)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(", ");
+  if (skipParts) logger.debug("auto-schedule", `skips: ${skipParts}`);
+
+  if (!toCheck.length) {
+    logger.debug("auto-schedule", `ciclo: ${releasing.length} avaliados | 0 verificados | todos fora da janela`);
+    return;
+  }
+
+  logger.info("auto-schedule", `ciclo: ${releasing.length} avaliados | ${toCheck.length} para verificar no provider`);
 
   let totalQueued = 0;
+  let failures = 0;
   for (const anime of toCheck) {
     try {
       const queued = await checkAndQueueNewEpisodes(anime);
       totalQueued += queued;
     } catch (err) {
+      failures++;
       logger.warn("auto-schedule", `erro em "${anime.title}": ${err}`);
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
 
-  if (totalQueued > 0)
-    logger.info("auto-schedule", `${totalQueued} novo(s) episódio(s) enfileirado(s)`);
+  logger.info(
+    "auto-schedule",
+    `ciclo concluído: verificados=${toCheck.length} | enfileirados=${totalQueued} | falhas=${failures}`
+  );
 }
 
 async function checkAndQueueNewEpisodes(anime: {

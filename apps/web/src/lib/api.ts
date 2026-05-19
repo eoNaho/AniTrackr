@@ -865,6 +865,13 @@ export type DownloadAnalytics = {
   totals: { total_bytes: number; total_count: number; avg_speed_kbps: number };
   byProvider: { provider: string; count: number }[];
   topAnimes: { anime_title: string; count: number }[];
+  health: {
+    successRate24h: number | null;
+    retryWaitCount: number;
+    topErrors: { code: string; count: number }[];
+    failedByProvider: { provider: string; count: number }[];
+    window24h: { completed: number; failed: number; total: number };
+  };
 };
 
 export const fetchDownloadAnalytics = () =>

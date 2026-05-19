@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   addTorrent,
   clearQueueMonitor,
@@ -156,10 +156,8 @@ export function TrackerHome() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sincroniza backendStatus com streamState
-  useEffect(() => {
-    if (streamState === "live") setBackendStatus("online");
-  }, [streamState]);
+  // backendStatus derivado: SSE live sempre implica online
+  const effectiveBackendStatus = streamState === "live" ? "online" : backendStatus;
 
   const selected = animes[selectedIndex < animes.length ? selectedIndex : 0] ?? null;
 
@@ -371,7 +369,7 @@ export function TrackerHome() {
   const totalStorage = summary ? fmtGb(summary.totalStorageGb) : "0.0 GB";
   const providerBadges = useMemo(() => providers.slice(0, 4), [providers]);
 
-  const statusColor = backendStatus === "online" ? "text-[#a6e3a1]" : backendStatus === "offline" ? "text-[#f38ba8]" : "text-[#f9e2af]";
+  const statusColor = effectiveBackendStatus === "online" ? "text-[#a6e3a1]" : effectiveBackendStatus === "offline" ? "text-[#f38ba8]" : "text-[#f9e2af]";
   const streamLabel = streamState === "live" ? "live" : streamState === "fallback" ? "polling" : "connecting";
   const streamLabelClass = streamState === "live" ? "text-[#a6e3a1]" : streamState === "fallback" ? "text-[#f9e2af]" : "text-[#6c7086]";
   const runtimeModeLabel = allowSimulatedDownloads === "true" ? "sim-on" : "real-only";
@@ -435,7 +433,7 @@ export function TrackerHome() {
               <span key={p} className="border border-[#232332] px-[6px] py-[2px] uppercase">[{p}]</span>
             ))}
             <span className="mr-2">
-              API: <span className={`font-bold ${statusColor}`}>{backendStatus}</span>
+              API: <span className={`font-bold ${statusColor}`}>{effectiveBackendStatus}</span>
               {backendHealth ? ` v${backendHealth.version}` : ""}
             </span>
             <span className="mr-2">

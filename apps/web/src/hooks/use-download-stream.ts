@@ -5,6 +5,11 @@ import { fetchDownloads, openDownloadStream, type DownloadJob, type DownloadStre
 
 export type StreamState = "connecting" | "live" | "fallback";
 
+// Sem eventos SSE por mais que este threshold → stream considerado stale → fallback
+const STALE_MS = 45_000;
+const STALE_CHECK_INTERVAL_MS = 10_000;
+const FALLBACK_POLL_MS = 2_000;
+
 function sendNotification(title: string, body: string, tag: string) {
   if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
   new Notification(title, { body, icon: "/favicon.ico", tag });
@@ -17,6 +22,8 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
 
   const prevCompletedRef = useRef<Set<string>>(new Set());
   const prevFailedRef = useRef<Set<string>>(new Set());
+  // Ref separada para evitar closure stale no stale-check interval
+  const lastEventMsRef = useRef<number>(0);
 
   const refreshDownloads = useCallback(async () => {
     try {
@@ -27,13 +34,15 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
     }
   }, [pushLog]);
 
-  // SSE connection
+  // ── SSE connection ─────────────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
     const close = openDownloadStream(
       (payload: DownloadStreamEvent) => {
         if (!mounted) return;
-        setLastStreamTs(Date.now());
+        const now = Date.now();
+        lastEventMsRef.current = now;
+        setLastStreamTs(now);
 
         if (payload.type === "snapshot" || payload.type === "progress") {
           setDownloadJobs(payload.jobs);
@@ -63,7 +72,7 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
         }
 
         if (payload.type === "enqueued") {
-          pushLog("queue", `novos jobs enfileirados: ${payload.count}`);
+          pushLog("queue", `${payload.count} job(s) enfileirado(s)`);
           return;
         }
         if (payload.type === "cancelled") {
@@ -88,8 +97,13 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
       },
       (state) => {
         if (!mounted) return;
-        if (state === "open") setStreamState("live");
-        else setStreamState("fallback");
+        if (state === "open") {
+          lastEventMsRef.current = Date.now();
+          setStreamState("live");
+        } else {
+          setStreamState("fallback");
+          pushLog("stream", "SSE desconectado — modo fallback ativo");
+        }
       }
     );
     return () => {
@@ -98,25 +112,30 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
     };
   }, [pushLog, refreshDownloads]);
 
-  // Polling fallback quando SSE cai
+  // ── Stale detection: SSE live mas sem eventos por STALE_MS → fallback ─────
+  useEffect(() => {
+    if (streamState !== "live") return;
+    const check = setInterval(() => {
+      if (lastEventMsRef.current > 0 && Date.now() - lastEventMsRef.current > STALE_MS) {
+        setStreamState("fallback");
+        pushLog("stream", `SSE inativo por >${STALE_MS / 1000}s — ativando polling`);
+      }
+    }, STALE_CHECK_INTERVAL_MS);
+    return () => clearInterval(check);
+  }, [streamState, pushLog]);
+
+  // ── Polling fallback (único, sem duplicata) ────────────────────────────────
   useEffect(() => {
     if (streamState === "live") return;
     const boot = setTimeout(() => { void refreshDownloads(); }, 0);
-    const timer = setInterval(() => { void refreshDownloads(); }, 2000);
-    return () => { clearTimeout(boot); clearInterval(timer); };
-  }, [refreshDownloads, streamState]);
+    const poll = setInterval(() => { void refreshDownloads(); }, FALLBACK_POLL_MS);
+    return () => { clearTimeout(boot); clearInterval(poll); };
+  }, [streamState, refreshDownloads]);
 
   const hasActiveDownloads = useMemo(
     () => downloadJobs.some((j) => j.status === "queued" || j.status === "downloading" || j.status === "retry_wait"),
     [downloadJobs]
   );
-
-  // Polling extra durante downloads ativos no fallback
-  useEffect(() => {
-    if (!hasActiveDownloads || streamState === "live") return;
-    const timer = setInterval(() => { void refreshDownloads(); }, 2000);
-    return () => clearInterval(timer);
-  }, [hasActiveDownloads, refreshDownloads, streamState]);
 
   const queuedCount = useMemo(
     () => downloadJobs.filter((j) => j.status === "queued" || j.status === "downloading" || j.status === "retry_wait").length,
