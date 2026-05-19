@@ -184,7 +184,7 @@ export function LibraryView({
   }
 
   return (
-  <div className="grid h-full w-full gap-[14px] overflow-hidden xl:grid-cols-[45%_1fr] xl:grid-rows-[1fr_300px]">
+  <div className="grid h-full w-full gap-[14px] overflow-hidden lg:grid-cols-[45%_1fr] lg:grid-rows-[1fr_300px]">
       <Panel title="Downloads :: Biblioteca Local" focused className="min-h-0">
         <div className="grid grid-cols-2 gap-2 border-b border-dashed border-[#45475a] p-3 md:grid-cols-4">
           <StatBox label="Queued" value={queuedCount} command="queue.len()" />
@@ -333,7 +333,7 @@ export function LibraryView({
 
               <div>
                 <div className="mb-1 text-[12px] font-bold text-[#89dceb]">-- LOCAL PATH --</div>
-                <div className="border-l-2 border-[#45475a] bg-black/20 px-3 py-2 text-[12px] text-[#bac2de]">
+                <div className="border border-[#45475a] bg-black/20 px-3 py-2 text-[12px] text-[#bac2de]">
                   {selected.path || "—"}
                 </div>
               </div>
@@ -364,7 +364,7 @@ export function LibraryView({
               {selected.synopsis && (
                 <div>
                   <div className="mb-1 text-[12px] font-bold text-[#89dceb]">-- TRACKER NOTE --</div>
-                  <p className="line-clamp-4 border-l-2 border-[#45475a] bg-black/20 px-3 py-2 text-[12px] leading-[1.6] text-[#6c7086]">
+                  <p className="line-clamp-4 border border-[#45475a] bg-black/20 px-3 py-2 text-[12px] leading-[1.6] text-[#6c7086]">
                     {selected.synopsis}
                   </p>
                 </div>
@@ -407,7 +407,7 @@ export function LibraryView({
                   />
                 </div>
                 {(nfoStatus || metaStatus) && (
-                  <div className="mt-2 border-l-2 border-[#45475a] bg-black/20 px-2 py-1 text-[11px] text-[#bac2de]">
+                  <div className="mt-2 border border-[#45475a] bg-black/20 px-2 py-1 text-[11px] text-[#bac2de]">
                     {nfoStatus && <div>{nfoStatus}</div>}
                     {metaStatus && <div>{metaStatus}</div>}
                   </div>
@@ -426,18 +426,18 @@ export function LibraryView({
         )}
       </Panel>
 
-      <Panel title={`Queue Monitor :: ${streamText}`} className="xl:col-span-2 min-h-0">
+      <Panel title={`Queue Monitor :: ${streamText}`} className="lg:col-span-2 min-h-0">
         <div className="flex flex-1 min-h-0 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-dashed border-[#45475a] px-4 py-2 text-[11px]">
           <span className={`font-bold uppercase ${streamClass}`}>{streamText}</span>
           <span className="text-[#6c7086]">active: {activeDownloads.length}</span>
           <span className="text-[#6c7086]">failed/cancelled: {failedDownloads.length}</span>
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex flex-wrap gap-1">
             <button
               onClick={onRefreshDownloads}
               className="border border-[#45475a] px-2 py-1 text-[#89dceb] hover:bg-[#89dceb] hover:text-[#0f0f14]"
             >
-              refresh queue
+              refresh
             </button>
             <button
               onClick={onRetryFailed}

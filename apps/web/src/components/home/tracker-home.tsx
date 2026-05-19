@@ -402,7 +402,7 @@ export function TrackerHome() {
             ANITRACKR-DOWNLOAD-TRACKER v2.0.1<span className="blink ml-1">_</span>
           </div>
 
-          <nav className="order-3 flex flex-wrap gap-1">
+          <nav className="order-3 flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {(
               [
                 ["dashboard", "início"],
@@ -463,7 +463,7 @@ export function TrackerHome() {
           {isBusy && <span className="shrink-0 text-[#f9e2af] blink">● busy</span>}
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-5">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-2 sm:pt-5">
           {mode === "dashboard" && (
             <DashboardView
               onSelectAnime={(id) => {
@@ -539,13 +539,14 @@ export function TrackerHome() {
           )}
         </div>
 
-        <footer className="flex shrink-0 flex-col gap-1 border-t border-[#45475a] pt-[8px] text-[11px] text-[#6c7086] md:flex-row md:items-center md:justify-between">
+        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[#45475a] pt-[8px] text-[11px] text-[#6c7086]">
           <div>
-            <span className="text-[#cba6f7]">anitrackr</span> download-tracker --scan --queue --missing
+            <span className="text-[#cba6f7]">anitrackr</span>
+            <span className="hidden sm:inline"> download-tracker --scan --queue --missing</span>
           </div>
-          <div>
+          <div className="hidden sm:flex items-center gap-1">
             <span className="font-bold text-[#cba6f7]">Tab</span> Switch ·{" "}
-            <span className="font-bold text-[#cba6f7]">↑/k ↓/j</span> Navigate ·{" "}
+            <span className="font-bold text-[#cba6f7]">↑/k ↓/j</span> Nav ·{" "}
             <span className="font-bold text-[#cba6f7]">d</span> Queue ·{" "}
             <span className="font-bold text-[#cba6f7]">s</span> Scan ·{" "}
             <span className="font-bold text-[#cba6f7]">r</span> Refresh

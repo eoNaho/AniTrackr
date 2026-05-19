@@ -404,7 +404,7 @@ export function ConfirmDialog({
       <div className="w-full max-w-[520px] border border-[#45475a] bg-[#0f0f14] p-4 shadow-[0_20px_50px_rgba(0,0,0,.8)]">
         <div className={`mb-2 text-[11px] font-bold uppercase tracking-wider ${palette.accentText}`}>[confirm action]</div>
         <h3 className="mb-3 text-[16px] font-extrabold text-[#cba6f7]">{title}</h3>
-        <div className="border-l-2 border-[#45475a] bg-black/20 px-3 py-2 text-[13px] leading-[1.6] text-[#bac2de]">
+        <div className="border border-[#45475a] bg-black/20 px-3 py-2 text-[13px] leading-[1.6] text-[#bac2de]">
           {message}
         </div>
         <div className="mt-4 flex justify-end gap-2">

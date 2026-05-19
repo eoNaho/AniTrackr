@@ -127,7 +127,7 @@ export function DashboardView({ onSelectAnime }: Props) {
     data.completed.length;
 
   return (
-    <div className="flex flex-col gap-6 overflow-y-auto">
+    <div className="h-full flex flex-col gap-6 overflow-y-auto">
       {analytics && analytics.totals.total_count > 0 && (
         <StatsBar analytics={analytics} />
       )}

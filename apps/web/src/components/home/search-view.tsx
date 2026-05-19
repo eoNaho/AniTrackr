@@ -91,7 +91,7 @@ export function SearchView({
       </Panel>
 
       {/* ── Results + Detail ── */}
-      <div className="grid min-h-0 flex-1 gap-[14px] md:grid-cols-[280px_1fr]">
+      <div className="grid min-h-0 flex-1 gap-[14px] grid-rows-2 md:grid-rows-1 md:grid-cols-[280px_1fr]">
         {/* Resultados */}
         <Panel title="Resultados" className="min-h-0">
           {/* Provider stats — mostra quantos resultados cada fonte retornou */}
@@ -194,7 +194,7 @@ export function SearchView({
                 {kitsuMeta?.synopsis && (
                   <div>
                     <div className="mb-1 text-[12px] font-bold text-[#89dceb]">-- SYNOPSIS --</div>
-                    <p className="border-l-2 border-[#45475a] bg-black/20 px-3 py-2 text-[12px] leading-[1.6] text-[#6c7086] line-clamp-4">
+                    <p className="border border-[#45475a] bg-black/20 px-3 py-2 text-[12px] leading-[1.6] text-[#6c7086] line-clamp-4">
                       {kitsuMeta.synopsis}
                     </p>
                   </div>
