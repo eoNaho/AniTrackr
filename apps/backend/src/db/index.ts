@@ -139,6 +139,16 @@ ensureColumn("animes", "mal_id", "mal_id INTEGER");
 ensureColumn("animes", "series_title", "series_title TEXT DEFAULT ''");
 ensureColumn("animes", "watch_status", "watch_status TEXT DEFAULT 'none'");
 ensureColumn("downloads", "source", "source TEXT DEFAULT 'manual'");
+// ── Phase 1: Smart Rules + Queue Profiles ────────────────────────────────────
+ensureColumn("anime_rules", "min_quality", "min_quality TEXT");
+ensureColumn("anime_rules", "preferred_fansub", "preferred_fansub TEXT");
+ensureColumn("anime_rules", "download_window_start", "download_window_start TEXT");
+ensureColumn("anime_rules", "download_window_end", "download_window_end TEXT");
+ensureColumn("anime_rules", "daily_limit", "daily_limit INTEGER DEFAULT 0");
+ensureColumn("anime_rules", "skip_fillers", "skip_fillers INTEGER DEFAULT 0");
+ensureColumn("anime_rules", "skip_recaps", "skip_recaps INTEGER DEFAULT 0");
+ensureColumn("anime_rules", "notes", "notes TEXT");
+ensureColumn("downloads", "enqueued_at", "enqueued_at TEXT");
 
 function syncConfigDefault(key: string, nextValue: string, legacyValues: string[]) {
   const row = db.query<{ value: string }, [string]>(`SELECT value FROM config WHERE key = ?`).get(key);
@@ -159,6 +169,32 @@ db.run(`
     queue_priority         INTEGER DEFAULT 0
   )
 `);
+
+// ── queue_profiles ─────────────────────────────────────────────────────────
+db.run(`
+  CREATE TABLE IF NOT EXISTS queue_profiles (
+    id                  TEXT PRIMARY KEY,
+    name                TEXT NOT NULL UNIQUE,
+    label               TEXT NOT NULL,
+    max_concurrent      INTEGER DEFAULT 3,
+    speed_limit_kbps    INTEGER DEFAULT 0,
+    window_start        TEXT,
+    window_end          TEXT,
+    preferred_type      TEXT DEFAULT 'ytdlp',
+    retry_max           INTEGER DEFAULT 3,
+    retry_base_delay_s  INTEGER DEFAULT 20,
+    is_active           INTEGER DEFAULT 0,
+    created_at          TEXT DEFAULT (datetime('now')),
+    updated_at          TEXT DEFAULT (datetime('now'))
+  )
+`);
+
+// Seed default profiles once
+if ((db.query<{ count: number }, []>(`SELECT COUNT(*) as count FROM queue_profiles`).get()?.count ?? 0) === 0) {
+  db.run(`INSERT INTO queue_profiles (id,name,label,max_concurrent,speed_limit_kbps,window_start,window_end,preferred_type,retry_max,retry_base_delay_s,is_active) VALUES ('home','home','Casa',3,0,NULL,NULL,'ytdlp',3,20,1)`);
+  db.run(`INSERT INTO queue_profiles (id,name,label,max_concurrent,speed_limit_kbps,window_start,window_end,preferred_type,retry_max,retry_base_delay_s,is_active) VALUES ('server','server','Servidor',8,0,NULL,NULL,'ytdlp',5,10,0)`);
+  db.run(`INSERT INTO queue_profiles (id,name,label,max_concurrent,speed_limit_kbps,window_start,window_end,preferred_type,retry_max,retry_base_delay_s,is_active) VALUES ('night','night','Noturno',6,0,'00:00','07:00','ytdlp',5,15,0)`);
+}
 
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_retry_at ON downloads(next_retry_at)`);
@@ -238,6 +274,20 @@ if (isDockerRuntime) {
   if (defaultQbEnabled === "true") {
     db.run(`UPDATE config SET value = 'true' WHERE key = 'qbittorrent_enabled'`);
   }
+}
+
+export type QueueProfileRow = {
+  id: string; name: string; label: string;
+  max_concurrent: number; speed_limit_kbps: number;
+  window_start: string | null; window_end: string | null;
+  preferred_type: string; retry_max: number; retry_base_delay_s: number;
+  is_active: number; created_at: string; updated_at: string;
+};
+
+export function getActiveQueueProfile(): QueueProfileRow | null {
+  return db.query<QueueProfileRow, []>(
+    `SELECT * FROM queue_profiles WHERE is_active = 1 LIMIT 1`
+  ).get() ?? null;
 }
 
 export default db;

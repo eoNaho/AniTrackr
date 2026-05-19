@@ -134,6 +134,45 @@ async function checkAndSchedule() {
   );
 }
 
+// ── Rule helpers ──────────────────────────────────────────────────────────────
+
+type AnimeScheduleRule = {
+  auto_download: number;
+  download_window_start: string | null;
+  download_window_end: string | null;
+  daily_limit: number;
+  skip_fillers: number;
+  skip_recaps: number;
+};
+
+function getAnimeScheduleRules(animeId: string): AnimeScheduleRule {
+  return db.query<AnimeScheduleRule, [string]>(`
+    SELECT auto_download, download_window_start, download_window_end, daily_limit, skip_fillers, skip_recaps
+    FROM anime_rules WHERE anime_id = ?
+  `).get(animeId) ?? { auto_download: 1, download_window_start: null, download_window_end: null, daily_limit: 0, skip_fillers: 0, skip_recaps: 0 };
+}
+
+function isInDownloadWindow(start: string | null, end: string | null): boolean {
+  if (!start || !end) return true;
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  const startMin = sh * 60 + sm;
+  const endMin = eh * 60 + em;
+  // Suporta janela overnight (ex.: 22:00-06:00)
+  if (startMin <= endMin) return nowMin >= startMin && nowMin <= endMin;
+  return nowMin >= startMin || nowMin <= endMin;
+}
+
+function getDailyQueuedCount(animeId: string): number {
+  return db.query<{ count: number }, [string]>(
+    `SELECT COUNT(*) as count FROM downloads WHERE anime_id = ? AND date(enqueued_at) = date('now')`
+  ).get(animeId)?.count ?? 0;
+}
+
+// ── Provider check ────────────────────────────────────────────────────────────
+
 async function checkAndQueueNewEpisodes(anime: {
   id: string;
   title: string;
@@ -143,6 +182,22 @@ async function checkAndQueueNewEpisodes(anime: {
   season_number: number;
 }): Promise<number> {
   if (!anime.source_url) return 0;
+
+  // ── Aplicar regras antes de consultar o provider ──────────────────────────
+  const rules = getAnimeScheduleRules(anime.id);
+
+  if (!isInDownloadWindow(rules.download_window_start, rules.download_window_end)) {
+    logger.debug("auto-schedule", `"${anime.title}": fora da janela (${rules.download_window_start}-${rules.download_window_end})`);
+    return 0;
+  }
+
+  if (rules.daily_limit > 0) {
+    const todayCount = getDailyQueuedCount(anime.id);
+    if (todayCount >= rules.daily_limit) {
+      logger.debug("auto-schedule", `"${anime.title}": limite diário atingido (${todayCount}/${rules.daily_limit})`);
+      return 0;
+    }
+  }
 
   const existing = new Set(
     db.query<{ episode_number: number }, [string]>(
@@ -165,6 +220,29 @@ async function checkAndQueueNewEpisodes(anime: {
   let queued = 0;
 
   for (const ep of newEps) {
+    // ── Skip filler/recap (requer metadado do Jikan) ──────────────────────
+    if (rules.skip_fillers || rules.skip_recaps) {
+      const epMeta = db.query<{ is_filler: number; is_recap: number }, [string, number]>(
+        `SELECT is_filler, is_recap FROM episodes WHERE anime_id = ? AND number = ?`
+      ).get(anime.id, ep.number);
+      if (epMeta) {
+        if (rules.skip_fillers && epMeta.is_filler) {
+          logger.debug("auto-schedule", `"${anime.title}" ep ${ep.number}: skip (filler)`);
+          continue;
+        }
+        if (rules.skip_recaps && epMeta.is_recap) {
+          logger.debug("auto-schedule", `"${anime.title}" ep ${ep.number}: skip (recap)`);
+          continue;
+        }
+      }
+    }
+
+    // ── Verificar limite diário por episódio (reavalia a cada iteração) ──
+    if (rules.daily_limit > 0 && getDailyQueuedCount(anime.id) >= rules.daily_limit) {
+      logger.debug("auto-schedule", `"${anime.title}": limite diário atingido, parando em ep ${ep.number}`);
+      break;
+    }
+
     const sourceUrl = urlByNumber.get(ep.number) ?? anime.source_url;
     const jobs = enqueueDownloads(anime.id, [ep.number], anime.season_number, sourceUrl);
     queued += jobs.length;

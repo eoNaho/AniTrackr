@@ -594,46 +594,70 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
   .get("/:id/rules", ({ params }) => {
     const rule = db.query<{
       anime_id: string;
-      preferred_provider: string | null;
-      preferred_quality: string | null;
-      preferred_download_type: string | null;
-      preferred_language: string | null;
-      auto_download: number;
-      queue_priority: number;
+      preferred_provider: string | null; preferred_quality: string | null;
+      preferred_download_type: string | null; preferred_language: string | null;
+      auto_download: number; queue_priority: number;
+      min_quality: string | null; preferred_fansub: string | null;
+      download_window_start: string | null; download_window_end: string | null;
+      daily_limit: number; skip_fillers: number; skip_recaps: number; notes: string | null;
     }, [string]>(`SELECT * FROM anime_rules WHERE anime_id = ?`).get(params.id);
-    return rule ?? { anime_id: params.id };
+    return rule ?? {
+      anime_id: params.id, preferred_provider: null, preferred_quality: null,
+      preferred_download_type: null, preferred_language: null,
+      auto_download: 1, queue_priority: 0, min_quality: null, preferred_fansub: null,
+      download_window_start: null, download_window_end: null,
+      daily_limit: 0, skip_fillers: 0, skip_recaps: 0, notes: null,
+    };
   }, { params: t.Object({ id: t.String() }) })
 
   // PUT /api/library/:id/rules
   .put("/:id/rules", ({ params, body }) => {
-    const {
-      preferredProvider, preferredQuality, preferredDownloadType,
-      preferredLanguage, autoDownload, queuePriority,
-    } = body as {
-      preferredProvider?: string; preferredQuality?: string;
-      preferredDownloadType?: string; preferredLanguage?: string;
+    const b = body as {
+      preferredProvider?: string | null; preferredQuality?: string | null;
+      preferredDownloadType?: string | null; preferredLanguage?: string | null;
       autoDownload?: number; queuePriority?: number;
+      minQuality?: string | null; preferredFansub?: string | null;
+      downloadWindowStart?: string | null; downloadWindowEnd?: string | null;
+      dailyLimit?: number; skipFillers?: number; skipRecaps?: number; notes?: string | null;
     };
     db.run(`
-      INSERT INTO anime_rules
-        (anime_id, preferred_provider, preferred_quality, preferred_download_type,
-         preferred_language, auto_download, queue_priority)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO anime_rules (
+        anime_id, preferred_provider, preferred_quality, preferred_download_type,
+        preferred_language, auto_download, queue_priority,
+        min_quality, preferred_fansub, download_window_start, download_window_end,
+        daily_limit, skip_fillers, skip_recaps, notes
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(anime_id) DO UPDATE SET
-        preferred_provider = excluded.preferred_provider,
-        preferred_quality = excluded.preferred_quality,
+        preferred_provider      = excluded.preferred_provider,
+        preferred_quality       = excluded.preferred_quality,
         preferred_download_type = excluded.preferred_download_type,
-        preferred_language = excluded.preferred_language,
-        auto_download = excluded.auto_download,
-        queue_priority = excluded.queue_priority
+        preferred_language      = excluded.preferred_language,
+        auto_download           = excluded.auto_download,
+        queue_priority          = excluded.queue_priority,
+        min_quality             = excluded.min_quality,
+        preferred_fansub        = excluded.preferred_fansub,
+        download_window_start   = excluded.download_window_start,
+        download_window_end     = excluded.download_window_end,
+        daily_limit             = excluded.daily_limit,
+        skip_fillers            = excluded.skip_fillers,
+        skip_recaps             = excluded.skip_recaps,
+        notes                   = excluded.notes
     `, [
       params.id,
-      preferredProvider ?? null,
-      preferredQuality ?? null,
-      preferredDownloadType ?? null,
-      preferredLanguage ?? null,
-      autoDownload ?? 1,
-      queuePriority ?? 0,
+      b.preferredProvider      ?? null,
+      b.preferredQuality       ?? null,
+      b.preferredDownloadType  ?? null,
+      b.preferredLanguage      ?? null,
+      b.autoDownload           ?? 1,
+      b.queuePriority          ?? 0,
+      b.minQuality             ?? null,
+      b.preferredFansub        ?? null,
+      b.downloadWindowStart    ?? null,
+      b.downloadWindowEnd      ?? null,
+      b.dailyLimit             ?? 0,
+      b.skipFillers            ?? 0,
+      b.skipRecaps             ?? 0,
+      b.notes                  ?? null,
     ]);
     return { ok: true };
   }, { params: t.Object({ id: t.String() }) })

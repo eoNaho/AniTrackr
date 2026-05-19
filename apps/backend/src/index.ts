@@ -15,6 +15,7 @@ import { dashboardRoutes } from "./routes/dashboard.ts";
 import { franchiseRoutes } from "./routes/franchise.ts";
 import { integrityRoutes } from "./routes/integrity.ts";
 import { discoverRoutes } from "./routes/discover.ts";
+import { queueProfileRoutes } from "./routes/queue-profiles.ts";
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
 import { runBackupIfDue } from "./services/backup.ts";
@@ -59,6 +60,7 @@ const app = new Elysia()
       .use(franchiseRoutes)
       .use(integrityRoutes)
       .use(discoverRoutes)
+      .use(queueProfileRoutes)
       // ── Auto-schedule (registrado aqui para garantir que o módulo já foi inicializado) ──
       .get("/auto-schedule/status", () => getAutoScheduleStatus())
       .post("/auto-schedule/run", async () => {

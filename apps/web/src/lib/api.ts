@@ -698,6 +698,15 @@ export type AnimeRule = {
   preferred_language?: string | null;
   auto_download?: number;
   queue_priority?: number;
+  // Phase 1 — Smart Rules
+  min_quality?: string | null;
+  preferred_fansub?: string | null;
+  download_window_start?: string | null;
+  download_window_end?: string | null;
+  daily_limit?: number;
+  skip_fillers?: number;
+  skip_recaps?: number;
+  notes?: string | null;
 };
 
 export type AnimeRuleInput = {
@@ -707,6 +716,15 @@ export type AnimeRuleInput = {
   preferredLanguage?: string | null;
   autoDownload?: number;
   queuePriority?: number;
+  // Phase 1 — Smart Rules
+  minQuality?: string | null;
+  preferredFansub?: string | null;
+  downloadWindowStart?: string | null;
+  downloadWindowEnd?: string | null;
+  dailyLimit?: number;
+  skipFillers?: number;
+  skipRecaps?: number;
+  notes?: string | null;
 };
 
 export type FranchiseEntry = {
@@ -876,3 +894,49 @@ export type DownloadAnalytics = {
 
 export const fetchDownloadAnalytics = () =>
   requestJson<DownloadAnalytics>("/api/downloads/analytics");
+
+// ── Queue Profiles ────────────────────────────────────────────────────────────
+
+export type QueueProfile = {
+  id: string;
+  name: string;
+  label: string;
+  max_concurrent: number;
+  speed_limit_kbps: number;
+  window_start: string | null;
+  window_end: string | null;
+  preferred_type: string;
+  retry_max: number;
+  retry_base_delay_s: number;
+  is_active: number;
+};
+
+export const fetchQueueProfiles = () =>
+  requestJson<QueueProfile[]>("/api/queue-profiles");
+
+export const fetchActiveQueueProfile = () =>
+  requestJson<QueueProfile | null>("/api/queue-profiles/active");
+
+export const activateQueueProfile = (id: string) =>
+  requestJsonWithBodyError<{ ok: boolean; activeId: string }>(
+    `${getBackendUrl()}/api/queue-profiles/${id}/activate`,
+    { method: "POST" }
+  );
+
+export const createQueueProfile = (data: Omit<QueueProfile, "id" | "name" | "is_active">) =>
+  requestJsonWithBodyError<{ ok: boolean; id: string }>(
+    `${getBackendUrl()}/api/queue-profiles`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }
+  );
+
+export const updateQueueProfile = (id: string, data: Partial<Omit<QueueProfile, "id" | "name" | "is_active">>) =>
+  requestJsonWithBodyError<{ ok: boolean }>(
+    `${getBackendUrl()}/api/queue-profiles/${id}`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }
+  );
+
+export const deleteQueueProfile = (id: string) =>
+  requestJsonWithBodyError<{ ok: boolean }>(
+    `${getBackendUrl()}/api/queue-profiles/${id}`,
+    { method: "DELETE" }
+  );

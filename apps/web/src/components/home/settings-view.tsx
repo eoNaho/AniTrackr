@@ -10,10 +10,16 @@ import {
   fetchDownloadHistory,
   fetchAutoScheduleStatus,
   triggerAutoSchedule,
+  fetchQueueProfiles,
+  activateQueueProfile,
+  updateQueueProfile,
+  createQueueProfile,
+  deleteQueueProfile,
   type ProviderHealthEntry,
   type QbtConnectionStatus,
   type DownloadHistoryMonth,
   type DownloadHistoryProvider,
+  type QueueProfile,
 } from "@/lib/api";
 import { Panel } from "./ui";
 
@@ -381,6 +387,155 @@ const DEFAULTS: ConfigState = {
   nyaa_default_category: "1_2",
 };
 
+// ── Queue Profiles ────────────────────────────────────────────────────────────
+
+const PROFILE_TYPES = [
+  { id: "ytdlp", label: "yt-dlp (direto)" },
+  { id: "torrent", label: "Torrent (qBt)" },
+];
+
+function QueueProfilesPanel() {
+  const [profiles, setProfiles] = useState<QueueProfile[]>([]);
+  const [editing, setEditing] = useState<QueueProfile | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setProfiles(await fetchQueueProfiles()); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { const t = setTimeout(() => { void load(); }, 0); return () => clearTimeout(t); }, [load]);
+
+  async function handleActivate(id: string) {
+    setBusy(true);
+    try { await activateQueueProfile(id); await load(); setStatus(`Perfil ativado: ${id}`); }
+    catch (e) { setStatus(`Erro: ${(e as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function handleSaveEdit() {
+    if (!editing) return;
+    setBusy(true);
+    try {
+      await updateQueueProfile(editing.id, {
+        label: editing.label, max_concurrent: editing.max_concurrent,
+        speed_limit_kbps: editing.speed_limit_kbps, window_start: editing.window_start,
+        window_end: editing.window_end, preferred_type: editing.preferred_type,
+        retry_max: editing.retry_max, retry_base_delay_s: editing.retry_base_delay_s,
+      });
+      await load();
+      setEditing(null);
+      setStatus("Perfil atualizado.");
+    } catch (e) { setStatus(`Erro: ${(e as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function handleCreate() {
+    if (!newLabel.trim()) return;
+    setBusy(true);
+    try {
+      await createQueueProfile({ label: newLabel.trim(), max_concurrent: 3, speed_limit_kbps: 0, window_start: null, window_end: null, preferred_type: "ytdlp", retry_max: 3, retry_base_delay_s: 20 });
+      await load();
+      setNewLabel("");
+      setShowNew(false);
+      setStatus("Perfil criado.");
+    } catch (e) { setStatus(`Erro: ${(e as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function handleDelete(id: string) {
+    setBusy(true);
+    try { await deleteQueueProfile(id); await load(); setStatus("Perfil removido."); }
+    catch (e) { setStatus(`Erro: ${(e as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  const upd = (patch: Partial<QueueProfile>) => setEditing((e) => e ? { ...e, ...patch } : e);
+
+  return (
+    <Panel title="[QUEUE PROFILES]" className="md:col-span-2">
+      <div className="p-3 text-[12px]">
+        {loading ? (
+          <div className="text-[#6c7086]">carregando perfis...</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {profiles.map((p) => (
+              <div key={p.id} className={`border p-3 ${p.is_active ? "border-[#cba6f7] bg-[#cba6f7]/5" : "border-[#45475a] bg-black/10"}`}>
+                {editing?.id === p.id ? (
+                  /* Edit form */
+                  <div className="flex flex-col gap-2">
+                    <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+                      <PF label="Nome"><input className={pInputCls} value={editing.label} onChange={(e) => upd({ label: e.target.value })} /></PF>
+                      <PF label="Concorrência"><input type="number" min={1} max={20} className={pInputCls} value={editing.max_concurrent} onChange={(e) => upd({ max_concurrent: parseInt(e.target.value) || 1 })} /></PF>
+                      <PF label="Tipo preferido">
+                        <select className={pInputCls} value={editing.preferred_type} onChange={(e) => upd({ preferred_type: e.target.value })}>
+                          {PROFILE_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                        </select>
+                      </PF>
+                      <PF label="Janela início (HH:MM)"><input type="time" className={pInputCls} value={editing.window_start ?? ""} onChange={(e) => upd({ window_start: e.target.value || null })} /></PF>
+                      <PF label="Janela fim (HH:MM)"><input type="time" className={pInputCls} value={editing.window_end ?? ""} onChange={(e) => upd({ window_end: e.target.value || null })} /></PF>
+                      <PF label="Retry máx"><input type="number" min={0} max={20} className={pInputCls} value={editing.retry_max} onChange={(e) => upd({ retry_max: parseInt(e.target.value) || 0 })} /></PF>
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <Btn onClick={() => void handleSaveEdit()} disabled={busy} variant="primary">salvar</Btn>
+                      <Btn onClick={() => setEditing(null)} disabled={busy}>cancelar</Btn>
+                    </div>
+                  </div>
+                ) : (
+                  /* Display row */
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      {p.is_active && <span className="text-[10px] font-bold text-[#cba6f7] uppercase">● ativo</span>}
+                      <span className={`font-bold ${p.is_active ? "text-[#cba6f7]" : "text-[#e0e0ed]"}`}>{p.label}</span>
+                      <span className="text-[#6c7086]">concorrência={p.max_concurrent}</span>
+                      {p.window_start && <span className="text-[#f9e2af]">{p.window_start}–{p.window_end}</span>}
+                      <span className="text-[#45475a]">{p.preferred_type}</span>
+                    </div>
+                    <div className="flex gap-1">
+                      {!p.is_active && <Btn onClick={() => void handleActivate(p.id)} disabled={busy} variant="success">ativar</Btn>}
+                      <Btn onClick={() => setEditing({ ...p })} disabled={busy}>editar</Btn>
+                      {!["home", "server", "night"].includes(p.id) && !p.is_active && (
+                        <Btn onClick={() => void handleDelete(p.id)} disabled={busy} variant="danger">✕</Btn>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* Novo perfil */}
+            {showNew ? (
+              <div className="flex gap-2 items-center border border-[#45475a] p-2">
+                <input className={`${pInputCls} flex-1`} value={newLabel} onChange={(e) => setNewLabel(e.target.value)} placeholder="Nome do perfil" onKeyDown={(e) => e.key === "Enter" && void handleCreate()} autoFocus />
+                <Btn onClick={() => void handleCreate()} disabled={busy || !newLabel.trim()} variant="primary">criar</Btn>
+                <Btn onClick={() => { setShowNew(false); setNewLabel(""); }} disabled={busy}>cancelar</Btn>
+              </div>
+            ) : (
+              <Btn onClick={() => setShowNew(true)} disabled={busy}>+ novo perfil</Btn>
+            )}
+
+            {status && (
+              <div className={`text-[11px] ${status.startsWith("Erro") ? "text-[#f38ba8]" : "text-[#a6e3a1]"}`}>{status}</div>
+            )}
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+const pInputCls = "w-full border border-[#45475a] bg-[#0d0d12] px-2 py-1 text-[12px] text-[#e0e0ed] outline-none focus:border-[#cba6f7] font-mono";
+function PF({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="flex flex-col gap-1"><span className="text-[10px] uppercase text-[#6c7086] tracking-wider">{label}</span>{children}</div>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function SettingsView({ onSaved }: SettingsViewProps) {
   const [cfg, setCfg] = useState<ConfigState>({ ...DEFAULTS });
   const [loading, setLoading] = useState(true);
@@ -711,6 +866,9 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
               </div>
             </div>
           </Panel>
+
+          {/* Queue Profiles */}
+          <QueueProfilesPanel />
 
           {/* Estatísticas e Auto-schedule */}
           <StatsPanel />

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { dirname } from "path";
-import db from "../db/index.ts";
+import db, { getActiveQueueProfile } from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 import { buildPath, inferSeasonInfo, stripSeasonSuffix } from "./naming.ts";
 import { getAllAnimeStreamUrl, searchAllAnime } from "./allanime.ts";
@@ -417,6 +417,9 @@ function getConfigInt(key: string, fallback: number, min = 0, max = Number.MAX_S
 }
 
 function getMaxConcurrentDownloads(): number {
+  // Queue profile overrides config when active
+  const profile = getActiveQueueProfile();
+  if (profile) return Math.max(1, Math.min(20, profile.max_concurrent));
   return getConfigInt("max_concurrent", 3, 1, 10);
 }
 
@@ -1587,11 +1590,11 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
   const insert = db.prepare(`
     INSERT OR IGNORE INTO downloads (
       id, anime_id, episode_number, season, status,
-      provider, quality, source_url, attempt_count, max_attempts
+      provider, quality, source_url, attempt_count, max_attempts, enqueued_at
     )
     VALUES (
       $id, $animeId, $ep, $season, 'queued',
-      $provider, $quality, $sourceUrl, 0, $maxAttempts
+      $provider, $quality, $sourceUrl, 0, $maxAttempts, datetime('now')
     )
   `);
 

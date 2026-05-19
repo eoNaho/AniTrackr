@@ -5,6 +5,7 @@ import type { DownloadJob } from "@/lib/api";
 import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan } from "@/lib/api";
 import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, ConfirmDialog, generateBar, statusBadgeClass, statusColor } from "./ui";
 import { EpisodeList } from "./episode-list";
+import { AnimeRulesPanel } from "./anime-rules-panel";
 
 type Props = {
   animes: AnimeView[];
@@ -377,6 +378,8 @@ export function LibraryView({
                   <EpisodeList animeId={selected.id} />
                 </div>
               </div>
+
+              <AnimeRulesPanel key={selected.id} animeId={selected.id} animeTitle={selected.title} />
 
               <div className="border border-dashed border-[#45475a] bg-black/20 p-3">
                 <div className="mb-2 text-[12px] font-bold text-[#89dceb]">-- JELLYFIN / METADATA --</div>
