@@ -12,27 +12,22 @@ import {
   fetchBackendHealth,
   fetchConfig,
   fetchDownloadStats,
-  fetchDownloads,
   fetchLibrary,
   fetchLibrarySummary,
   fetchMetadataSearch,
   fetchSearchProviders,
-  openDownloadStream,
   queueMissingEpisodes,
   queueMissingForAll,
   retryDownloadById,
   retryFailedDownloads,
   scanAnimeById,
-  searchAnime,
-  searchEpisodes,
   type BackendHealth,
-  type DownloadJob,
-  type DownloadStreamEvent,
-  type KitsuMetadata,
   type LibraryAnime,
   type LibrarySummary,
-  type SearchResult,
 } from "@/lib/api";
+// Note: fetchDownloads é gerenciado internamente pelo hook useDownloadStream
+import { useDownloadStream } from "@/hooks/use-download-stream";
+import { useSearchState, inferSeasonNumber } from "@/hooks/use-search-state";
 import { AnimeView, ConfirmDialog } from "./ui";
 import { LibraryView } from "./library-view";
 import { SearchView } from "./search-view";
@@ -74,137 +69,6 @@ function mapAnime(a: LibraryAnime): AnimeView {
 
 type Mode = "dashboard" | "library" | "calendar" | "discover" | "subtitles" | "search" | "diagnostics" | "integrity" | "settings";
 type LogEntry = { time: string; module: string; text: string };
-type StreamState = "connecting" | "live" | "fallback";
-type SearchEpisode = { key: string; number: number; label: string; url: string };
-function buildEpisodeKey(episode: { number: number; label: string; url: string }, index: number) {
-  return `${episode.number}::${episode.url}::${episode.label}::${index}`;
-}
-
-function normalizeAscii(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function parseSafePositiveInt(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const n = Number.parseInt(value, 10);
-  if (!Number.isFinite(n) || n <= 0 || n > 1000) return null;
-  return n;
-}
-
-function parseRomanNumeral(value: string): number | null {
-  const roman = value.trim().toUpperCase();
-  const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
-  let total = 0;
-  let prev = 0;
-  for (let i = roman.length - 1; i >= 0; i -= 1) {
-    const cur = map[roman[i]];
-    if (!cur) return null;
-    if (cur < prev) total -= cur;
-    else total += cur;
-    prev = cur;
-  }
-  if (total <= 0 || total > 100) return null;
-  return total;
-}
-
-const JAPANESE_NUMBER_MAP: Record<string, number> = {
-  ichi: 1,
-  ni: 2,
-  san: 3,
-  yon: 4,
-  shi: 4,
-  go: 5,
-  roku: 6,
-  nana: 7,
-  shichi: 7,
-  hachi: 8,
-  kyu: 9,
-  ku: 9,
-  juu: 10,
-};
-
-function inferSeasonNumber(...candidates: Array<string | null | undefined>): number {
-  for (const rawCandidate of candidates) {
-    if (!rawCandidate) continue;
-    const candidate = normalizeAscii(rawCandidate);
-
-    const direct =
-      candidate.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i)
-      ?? candidate.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
-      ?? candidate.match(/\bs(?:eason)?\s*0?(\d{1,2})\b/i)
-      ?? candidate.match(/\b(\d{1,2})\s*no\s*shou\b/i);
-    if (direct) {
-      const parsed = parseSafePositiveInt(direct[1]);
-      if (parsed != null) return parsed;
-    }
-
-    const roman = candidate.match(/\b(?:season|temporada)\s*([ivxlc]{1,5})\b/i);
-    if (roman) {
-      const parsed = parseRomanNumeral(roman[1]);
-      if (parsed != null) return parsed;
-    }
-
-    const japaneseNoShou = candidate.match(/\b([a-z]+)\s+no\s+shou\b/i);
-    if (japaneseNoShou) {
-      const parsed = JAPANESE_NUMBER_MAP[japaneseNoShou[1]];
-      if (parsed != null) return parsed;
-    }
-  }
-
-  return 1;
-}
-
-function inferEpisodeNumberFromUrl(url: string): number | null {
-  if (!url?.trim()) return null;
-
-  const raw = url.trim();
-  const rawEpisode = raw.match(/(?:episodio|episode|ep)[-_/ ]*(\d{1,4})(?:\b|$)/i);
-  if (rawEpisode) return parseSafePositiveInt(rawEpisode[1]);
-
-  try {
-    const parsed = new URL(raw);
-    const fromQuery =
-      parseSafePositiveInt(parsed.searchParams.get("ep"))
-      ?? parseSafePositiveInt(parsed.searchParams.get("episode"))
-      ?? parseSafePositiveInt(parsed.searchParams.get("episodio"));
-    if (fromQuery != null) return fromQuery;
-
-    const segments = parsed.pathname.split("/").filter(Boolean);
-    const last = segments.length > 0 ? segments[segments.length - 1] : "";
-    if (/^\d{1,4}$/.test(last)) {
-      return parseSafePositiveInt(last);
-    }
-  } catch {
-    // ignore parse errors
-  }
-
-  return null;
-}
-
-function inferEpisodeNumber(episode: { number: number; label: string; url: string }, fallback: number): number {
-  const fromUrl = inferEpisodeNumberFromUrl(episode.url);
-  if (fromUrl != null) return fromUrl;
-
-  const fromLabel = normalizeAscii(episode.label).match(/\b(?:episodio|episode|ep)\s*\.?\s*(\d{1,4})\b/i);
-  if (fromLabel) {
-    const parsed = parseSafePositiveInt(fromLabel[1]);
-    if (parsed != null) return parsed;
-  }
-
-  if (Number.isFinite(episode.number) && episode.number > 0) {
-    return episode.number;
-  }
-
-  return fallback;
-}
-
-function sendNotification(title: string, body: string) {
-  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
-  new Notification(title, { body, icon: "/favicon.ico" });
-}
 
 export function TrackerHome() {
   const [mode, setMode] = useState<Mode>("dashboard");
@@ -219,31 +83,12 @@ export function TrackerHome() {
     { time: "00:00:00", module: "app", text: "Iniciando AniTrackr v2.0.1..." },
   ]);
 
-  const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([]);
-  const [streamState, setStreamState] = useState<StreamState>("connecting");
-  const [lastStreamTs, setLastStreamTs] = useState<number | null>(null);
-
   const [downloadPath, setDownloadPath] = useState("");
   const [allowSimulatedDownloads, setAllowSimulatedDownloads] = useState("false");
   const [qbtEnabled, setQbtEnabled] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchSource, setSearchSource] = useState("all");
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchProviderStats, setSearchProviderStats] = useState<Record<string, import("@/lib/api").ProviderSearchStat> | null>(null);
-  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
-  const [kitsuMeta, setKitsuMeta] = useState<KitsuMetadata | null>(null);
   const [libraryFallbackPoster, setLibraryFallbackPoster] = useState<string | null>(null);
-  const [episodes, setEpisodes] = useState<SearchEpisode[]>([]);
-  const [selectedEpisodes, setSelectedEpisodes] = useState<string[]>([]);
-  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
-  const [isLoadingMeta, setIsLoadingMeta] = useState(false);
   const [deleteDialogTarget, setDeleteDialogTarget] = useState<AnimeView | null>(null);
-
-  const selectVersionRef = useRef(0);
-  const prevJobStatusRef = useRef<Map<string, string>>(new Map());
-  const prevCompletedRef = useRef<Set<string>>(new Set());
-  const prevFailedRef = useRef<Set<string>>(new Set());
 
   const pushLog = useCallback((module: string, text: string) => {
     setLogs((cur) => [
@@ -252,32 +97,38 @@ export function TrackerHome() {
     ]);
   }, []);
 
-  const refreshDownloads = useCallback(async () => {
-    try {
-      const downloads = await fetchDownloads();
-      setDownloadJobs(downloads.jobs);
-    } catch (err) {
-      pushLog("downloads", `erro ao atualizar fila: ${(err as Error).message}`);
-    }
-  }, [pushLog]);
+  // ── hooks ──────────────────────────────────────────────────────────────────
+
+  const { downloadJobs, streamState, lastStreamTs, refreshDownloads, queuedCount } =
+    useDownloadStream(pushLog);
+
+  const {
+    searchQuery, setSearchQuery,
+    searchSource, setSearchSource,
+    searchResults, searchProviderStats,
+    selectedResult, kitsuMeta, isLoadingMeta,
+    episodes, selectedEpisodes, isLoadingEpisodes,
+    runSearch, handleSelectResult,
+    toggleEpisode, selectAllEpisodes, clearAllEpisodes,
+  } = useSearchState(pushLog);
+
+  // ── library data ───────────────────────────────────────────────────────────
 
   const refreshData = useCallback(async () => {
     setIsBusy(true);
     try {
-      const [health, provRes, libRes, sumRes, statsRes, cfgRes, downloadsRes] = await Promise.all([
+      const [health, provRes, libRes, sumRes, statsRes, cfgRes] = await Promise.all([
         fetchBackendHealth(),
         fetchSearchProviders(),
         fetchLibrary(),
         fetchLibrarySummary(),
         fetchDownloadStats(),
         fetchConfig(),
-        fetchDownloads(),
       ]);
       setBackendHealth(health);
       setProviders(provRes.providers.map((p) => p.key ?? p.id ?? "?"));
       setAnimes(libRes.animes.map(mapAnime));
       setSummary(sumRes);
-      setDownloadJobs(downloadsRes.jobs);
       setBackendStatus("online");
       setDownloadPath(cfgRes.download_path ?? "");
       setAllowSimulatedDownloads(cfgRes.allow_simulated_downloads ?? "false");
@@ -300,128 +151,32 @@ export function TrackerHome() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      void refreshData();
-    }, 0);
+    const timer = setTimeout(() => { void refreshData(); }, 0);
     return () => clearTimeout(timer);
-  }, [refreshData]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Sincroniza backendStatus com streamState
   useEffect(() => {
-    let mounted = true;
-    const close = openDownloadStream(
-      (payload: DownloadStreamEvent) => {
-        if (!mounted) return;
-        setLastStreamTs(Date.now());
-
-        if (payload.type === "snapshot" || payload.type === "progress") {
-          setDownloadJobs(payload.jobs);
-          // Notificações de download concluído / falha permanente
-          for (const job of payload.jobs) {
-            if (job.status === "completed" && !prevCompletedRef.current.has(job.id)) {
-              prevCompletedRef.current.add(job.id);
-              sendNotification("Download concluído", `${job.animeTitle} — Ep. ${job.episodeNumber}`);
-            }
-            if (
-              job.status === "failed" &&
-              job.attemptCount >= job.maxAttempts &&
-              !prevFailedRef.current.has(job.id)
-            ) {
-              prevFailedRef.current.add(job.id);
-              sendNotification(
-                "Falha no download",
-                `${job.animeTitle} — Ep. ${job.episodeNumber}: ${job.errorMsg ?? "erro desconhecido"}`
-              );
-            }
-          }
-          return;
-        }
-
-        if (payload.type === "enqueued") {
-          pushLog("queue", `novos jobs enfileirados: ${payload.count}`);
-          return;
-        }
-        if (payload.type === "cancelled") {
-          pushLog("queue", `job cancelado: ${payload.jobId.slice(0, 8)}`);
-          void refreshDownloads();
-          return;
-        }
-        if (payload.type === "retried") {
-          pushLog("queue", `job em retry: ${payload.jobId.slice(0, 8)}`);
-          void refreshDownloads();
-          return;
-        }
-        if (payload.type === "retry-batch") {
-          pushLog("queue", `retry em lote: ${payload.retried}/${payload.requested}`);
-          void refreshDownloads();
-          return;
-        }
-        if (payload.type === "batch-enqueued") {
-          pushLog("queue", `missing-all: ${payload.totalQueued} jobs`);
-          void refreshDownloads();
-        }
-      },
-      (state) => {
-        if (!mounted) return;
-        if (state === "open") {
-          setStreamState("live");
-          setBackendStatus("online");
-        } else {
-          setStreamState("fallback");
-        }
-      }
-    );
-
-    return () => {
-      mounted = false;
-      close();
-    };
-  }, [pushLog, refreshDownloads]);
-
-  useEffect(() => {
-    if (streamState === "live") return;
-    const boot = setTimeout(() => {
-      void refreshDownloads();
-    }, 0);
-    const timer = setInterval(() => {
-      void refreshDownloads();
-    }, 2000);
-    return () => {
-      clearTimeout(boot);
-      clearInterval(timer);
-    };
-  }, [refreshDownloads, streamState]);
-
-  // Detectar downloads completados para notificação
-  useEffect(() => {
-    const prev = prevJobStatusRef.current;
-    for (const job of downloadJobs) {
-      if (job.status === "completed" && prev.get(job.id) === "downloading") {
-        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          new Notification(`✓ Download concluído`, {
-            body: `${job.animeTitle} — Ep ${job.episodeNumber}`,
-            tag: job.id,
-          });
-        }
-      }
-    }
-    prevJobStatusRef.current = new Map(downloadJobs.map((j) => [j.id, j.status]));
-  }, [downloadJobs]);
-
-  const hasActiveDownloads = useMemo(
-    () => downloadJobs.some((j) => j.status === "queued" || j.status === "downloading" || j.status === "retry_wait"),
-    [downloadJobs]
-  );
-
-  useEffect(() => {
-    // SSE já entrega eventos de progresso em tempo real; polling só faz sentido no fallback
-    if (!hasActiveDownloads || streamState === "live") return;
-    const timer = setInterval(() => {
-      void refreshDownloads();
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [hasActiveDownloads, refreshDownloads, streamState]);
+    if (streamState === "live") setBackendStatus("online");
+  }, [streamState]);
 
   const selected = animes[selectedIndex < animes.length ? selectedIndex : 0] ?? null;
+
+  // Poster fallback via Kitsu para animes sem poster
+  useEffect(() => {
+    let active = true;
+    if (!selected || selected.posterUrl) {
+      queueMicrotask(() => { if (active) setLibraryFallbackPoster(null); });
+      return;
+    }
+    fetchMetadataSearch(selected.title, "kitsu")
+      .then((res) => { if (active) setLibraryFallbackPoster(res.results?.[0]?.posterUrl ?? null); })
+      .catch(() => { if (active) setLibraryFallbackPoster(null); });
+    return () => { active = false; };
+  }, [selected]);
+
+  // ── keyboard shortcuts ─────────────────────────────────────────────────────
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -434,70 +189,20 @@ export function TrackerHome() {
       }
       if (deleteDialogTarget) return;
       if (mode !== "library") return;
-      if (["ArrowDown", "j"].includes(e.key)) {
-        e.preventDefault();
-        setSelectedIndex((i) => Math.min(animes.length - 1, i + 1));
-        return;
-      }
-      if (["ArrowUp", "k"].includes(e.key)) {
-        e.preventDefault();
-        setSelectedIndex((i) => Math.max(0, i - 1));
-        return;
-      }
-      if (e.key === "d" && !isBusy) {
-        e.preventDefault();
-        void handleQueueMissing();
-        return;
-      }
-      if (e.key === "b" && !isBusy) {
-        e.preventDefault();
-        void handleQueueMissingAll();
-        return;
-      }
-      if (e.key === "s" && !isBusy) {
-        e.preventDefault();
-        void handleScan();
-        return;
-      }
-      if (e.key === "x" && !isBusy) {
-        e.preventDefault();
-        handleDeleteFromLibrary();
-        return;
-      }
-      if (e.key === "r" && !isBusy) {
-        e.preventDefault();
-        void refreshData();
-        return;
-      }
+      if (["ArrowDown", "j"].includes(e.key)) { e.preventDefault(); setSelectedIndex((i) => Math.min(animes.length - 1, i + 1)); return; }
+      if (["ArrowUp", "k"].includes(e.key)) { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return; }
+      if (e.key === "d" && !isBusy) { e.preventDefault(); void handleQueueMissing(); return; }
+      if (e.key === "b" && !isBusy) { e.preventDefault(); void handleQueueMissingAll(); return; }
+      if (e.key === "s" && !isBusy) { e.preventDefault(); void handleScan(); return; }
+      if (e.key === "x" && !isBusy) { e.preventDefault(); handleDeleteFromLibrary(); return; }
+      if (e.key === "r" && !isBusy) { e.preventDefault(); void refreshData(); return; }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, animes.length, isBusy, selected, deleteDialogTarget]);
 
-  useEffect(() => {
-    let active = true;
-    if (!selected || selected.posterUrl) {
-      queueMicrotask(() => {
-        if (active) setLibraryFallbackPoster(null);
-      });
-      return;
-    }
-
-    fetchMetadataSearch(selected.title, "kitsu")
-      .then((res) => {
-        if (!active) return;
-        setLibraryFallbackPoster(res.results?.[0]?.posterUrl ?? null);
-      })
-      .catch(() => {
-        if (!active) return;
-        setLibraryFallbackPoster(null);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [selected]);
+  // ── library handlers ───────────────────────────────────────────────────────
 
   async function handleQueueMissing() {
     if (!selected) return;
@@ -506,11 +211,8 @@ export function TrackerHome() {
       const res = await queueMissingEpisodes(selected.id);
       pushLog("queue", `${selected.title}: ${res.queued} eps na fila`);
       await refreshData();
-    } catch (e) {
-      pushLog("queue", `erro: ${(e as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
+    } catch (e) { pushLog("queue", `erro: ${(e as Error).message}`); }
+    finally { setIsBusy(false); }
   }
 
   async function handleQueueMissingAll() {
@@ -519,11 +221,8 @@ export function TrackerHome() {
       const res = await queueMissingForAll();
       pushLog("queue", `missing-all: ${res.totalQueued} enfileirados`);
       await refreshData();
-    } catch (e) {
-      pushLog("queue", `erro: ${(e as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
+    } catch (e) { pushLog("queue", `erro: ${(e as Error).message}`); }
+    finally { setIsBusy(false); }
   }
 
   async function handleScan() {
@@ -533,11 +232,8 @@ export function TrackerHome() {
       const res = await scanAnimeById(selected.id);
       pushLog("scan", `${selected.title}: ${res.foundFiles ?? 0} arquivos`);
       await refreshData();
-    } catch (e) {
-      pushLog("scan", `erro: ${(e as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
+    } catch (e) { pushLog("scan", `erro: ${(e as Error).message}`); }
+    finally { setIsBusy(false); }
   }
 
   function handleDeleteFromLibrary() {
@@ -549,98 +245,46 @@ export function TrackerHome() {
     if (!deleteDialogTarget) return;
     const target = deleteDialogTarget;
     setDeleteDialogTarget(null);
-
     setIsBusy(true);
     try {
       const res = await deleteLibraryAnime(target.id);
-      if (res?.error) {
-        pushLog("library", `erro ao deletar: ${res.error}`);
-      } else {
-        pushLog("library", `removido: ${target.title}`);
-        await refreshData();
-      }
-    } catch (e) {
-      pushLog("library", `erro ao deletar: ${(e as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
+      if (res?.error) pushLog("library", `erro ao deletar: ${res.error}`);
+      else { pushLog("library", `removido: ${target.title}`); await refreshData(); }
+    } catch (e) { pushLog("library", `erro ao deletar: ${(e as Error).message}`); }
+    finally { setIsBusy(false); }
   }
 
   async function handleCancelDownload(id: string) {
-    try {
-      await cancelDownloadById(id);
-      pushLog("queue", `cancelado: ${id.slice(0, 8)}`);
-      await refreshDownloads();
-    } catch (e) {
-      pushLog("queue", `cancel erro: ${(e as Error).message}`);
-    }
+    try { await cancelDownloadById(id); pushLog("queue", `cancelado: ${id.slice(0, 8)}`); await refreshDownloads(); }
+    catch (e) { pushLog("queue", `cancel erro: ${(e as Error).message}`); }
   }
 
   async function handleRetryDownload(id: string) {
-    try {
-      await retryDownloadById(id);
-      pushLog("queue", `retry: ${id.slice(0, 8)}`);
-      await refreshDownloads();
-    } catch (e) {
-      pushLog("queue", `retry erro: ${(e as Error).message}`);
-    }
+    try { await retryDownloadById(id); pushLog("queue", `retry: ${id.slice(0, 8)}`); await refreshDownloads(); }
+    catch (e) { pushLog("queue", `retry erro: ${(e as Error).message}`); }
   }
 
   async function handleRetryFailedBatch() {
-    try {
-      const res = await retryFailedDownloads(50);
-      pushLog("queue", `retry em lote: ${res.retried}/${res.requested}`);
-      await refreshDownloads();
-    } catch (e) {
-      pushLog("queue", `retry-lote erro: ${(e as Error).message}`);
-    }
+    try { const res = await retryFailedDownloads(50); pushLog("queue", `retry em lote: ${res.retried}/${res.requested}`); await refreshDownloads(); }
+    catch (e) { pushLog("queue", `retry-lote erro: ${(e as Error).message}`); }
   }
 
   async function handleCancelAllActive() {
-    try {
-      const res = await cancelAllDownloads();
-      pushLog("queue", `cancel all: ${res.cancelled}`);
-      await refreshDownloads();
-    } catch (e) {
-      pushLog("queue", `cancel-all erro: ${(e as Error).message}`);
-    }
+    try { const res = await cancelAllDownloads(); pushLog("queue", `cancel all: ${res.cancelled}`); await refreshDownloads(); }
+    catch (e) { pushLog("queue", `cancel-all erro: ${(e as Error).message}`); }
   }
 
   async function handleClearQueueMonitor() {
-    try {
-      const res = await clearQueueMonitor();
-      pushLog("queue", `monitor limpo: removidos ${res.removed}`);
-      await refreshDownloads();
-    } catch (e) {
-      pushLog("queue", `clear-monitor erro: ${(e as Error).message}`);
-    }
+    try { const res = await clearQueueMonitor(); pushLog("queue", `monitor limpo: removidos ${res.removed}`); await refreshDownloads(); }
+    catch (e) { pushLog("queue", `clear-monitor erro: ${(e as Error).message}`); }
   }
+
+  // ── search handlers ────────────────────────────────────────────────────────
 
   async function handleSearch() {
-    return runSearch(searchQuery, searchSource);
-  }
-
-  async function runSearch(rawQuery: string, sourceOverride?: string) {
-    const effectiveQuery = rawQuery.trim();
-    const effectiveSource = sourceOverride ?? searchSource;
-    if (effectiveQuery.length < 2) return;
     setIsBusy(true);
-    setSearchResults([]);
-    setSearchProviderStats(null);
-    setSelectedResult(null);
-    setKitsuMeta(null);
-    setEpisodes([]);
-    setSelectedEpisodes([]);
-    try {
-      const res = await searchAnime(effectiveQuery, effectiveSource);
-      setSearchResults(res.results ?? []);
-      setSearchProviderStats(res.providerStats ?? null);
-      pushLog("search", `"${effectiveQuery}" -> ${res.results?.length ?? 0} resultados`);
-    } catch (e) {
-      pushLog("search", `erro: ${(e as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
+    try { await runSearch(searchQuery, searchSource); }
+    finally { setIsBusy(false); }
   }
 
   async function handleDiscoverSearch(title: string) {
@@ -649,68 +293,9 @@ export function TrackerHome() {
     setSearchQuery(normalized);
     setSearchSource("all");
     setMode("search");
-    await runSearch(normalized, "all");
-  }
-
-  async function handleSelectResult(result: SearchResult) {
-    selectVersionRef.current += 1;
-    const version = selectVersionRef.current;
-
-    setSelectedResult(result);
-    setEpisodes([]);
-    setSelectedEpisodes([]);
-    setKitsuMeta(null);
-    setIsLoadingMeta(true);
-    setIsLoadingEpisodes(true);
-
-    fetchMetadataSearch(result.title.split(" [")[0].split(" ·")[0], "kitsu")
-      .then((res) => {
-        if (selectVersionRef.current !== version) return;
-        if (res.results?.length) {
-          setKitsuMeta(res.results[0]);
-          pushLog("meta", `kitsu: ${res.results[0].title}`);
-        } else {
-          pushLog("meta", "kitsu: sem resultado");
-        }
-      })
-      .catch(() => { if (selectVersionRef.current === version) pushLog("meta", "kitsu: falha"); })
-      .finally(() => { if (selectVersionRef.current === version) setIsLoadingMeta(false); });
-
-    if (result.provider === "nyaa") {
-      const nyaaEp: SearchEpisode = {
-        key: `nyaa::${result.id ?? result.url ?? "0"}`,
-        number: 1,
-        label: "▼ Adicionar ao qBittorrent",
-        url: result.url ?? "",
-      };
-      setEpisodes([nyaaEp]);
-      setSelectedEpisodes([nyaaEp.key]);
-      setIsLoadingEpisodes(false);
-      return;
-    }
-
-    searchEpisodes({ provider: result.provider ?? searchSource, url: result.url, allAnimeId: result.allAnimeId ?? result.id })
-      .then((res) => {
-        if (selectVersionRef.current !== version) return;
-        const eps: SearchEpisode[] = (res.episodes ?? [])
-          .map((episode, index) => {
-            const normalizedEpisode = {
-              ...episode,
-              number: inferEpisodeNumber(episode, index + 1),
-              label: episode.label || `Episódio ${index + 1}`,
-            };
-            return {
-              ...normalizedEpisode,
-              key: buildEpisodeKey(normalizedEpisode, index),
-            };
-          })
-          .sort((a, b) => a.number - b.number);
-        setEpisodes(eps);
-        setSelectedEpisodes(eps.slice(0, 1).map((e) => e.key));
-        pushLog("search", `${result.title}: ${res.total} eps`);
-      })
-      .catch((e) => { if (selectVersionRef.current === version) pushLog("search", `eps erro: ${(e as Error).message}`); })
-      .finally(() => { if (selectVersionRef.current === version) setIsLoadingEpisodes(false); });
+    setIsBusy(true);
+    try { await runSearch(normalized, "all"); }
+    finally { setIsBusy(false); }
   }
 
   async function handleQueueSelected() {
@@ -723,11 +308,8 @@ export function TrackerHome() {
         if (!magnetLink) throw new Error("Magnet link ausente neste resultado.");
         await addTorrent({ magnetLink });
         pushLog("torrent", `${selectedResult.title.split(" [")[0]}: adicionado ao qBittorrent`);
-      } catch (e) {
-        pushLog("torrent", `erro: ${(e as Error).message}`);
-      } finally {
-        setIsBusy(false);
-      }
+      } catch (e) { pushLog("torrent", `erro: ${(e as Error).message}`); }
+      finally { setIsBusy(false); }
       return;
     }
 
@@ -737,26 +319,17 @@ export function TrackerHome() {
         .filter((ep) => selectedSet.has(ep.key))
         .sort((a, b) => a.number - b.number);
 
-      // Mantém a relação 1:1 entre (episódio, URL) para evitar drift no monitor.
       const enqueueTargets = new Map<string, { number: number; sourceUrl: string }>();
       for (const episode of selectedEntries) {
         const sourceUrl = episode.url || selectedResult.url || "";
         if (!sourceUrl) continue;
         const key = `${episode.number}::${sourceUrl}`;
-        if (!enqueueTargets.has(key)) {
-          enqueueTargets.set(key, { number: episode.number, sourceUrl });
-        }
+        if (!enqueueTargets.has(key)) enqueueTargets.set(key, { number: episode.number, sourceUrl });
       }
 
-      if (enqueueTargets.size === 0) {
-        throw new Error("Nenhum episódio com URL válida para enfileirar.");
-      }
+      if (enqueueTargets.size === 0) throw new Error("Nenhum episódio com URL válida para enfileirar.");
 
-      const inferredSeason = inferSeasonNumber(
-        selectedResult.title,
-        kitsuMeta?.title,
-        kitsuMeta?.altTitle,
-      );
+      const inferredSeason = inferSeasonNumber(selectedResult.title, kitsuMeta?.title, kitsuMeta?.altTitle);
 
       const lib = await createLibraryAnime({
         title: selectedResult.title,
@@ -771,42 +344,28 @@ export function TrackerHome() {
         kitsuId: kitsuMeta?.kitsuId,
         seasonNumber: inferredSeason,
       });
-      if (lib.reused) {
-        pushLog("library", `${selectedResult.title}: reutilizado registro existente`);
-      }
+      if (lib.reused) pushLog("library", `${selectedResult.title}: reutilizado registro existente`);
 
       let queuedCount = 0;
       for (const target of enqueueTargets.values()) {
-        const res = await enqueueEpisodes({
-          animeId: lib.id,
-          episodes: [target.number],
-          season: inferredSeason,
-          sourceUrl: target.sourceUrl,
-        });
+        const res = await enqueueEpisodes({ animeId: lib.id, episodes: [target.number], season: inferredSeason, sourceUrl: target.sourceUrl });
         queuedCount += res.queued ?? 0;
       }
 
       pushLog("queue", `${selectedResult.title}: ${queuedCount}/${enqueueTargets.size} eps enfileirados`);
       await refreshData();
       setMode("library");
-    } catch (e) {
-      pushLog("queue", `erro: ${(e as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
+    } catch (e) { pushLog("queue", `erro: ${(e as Error).message}`); }
+    finally { setIsBusy(false); }
   }
 
-  const queuedCount = useMemo(
-    () => downloadJobs.filter((j) => j.status === "queued" || j.status === "downloading" || j.status === "retry_wait").length,
-    [downloadJobs]
-  );
-  // byStatus keys vêm capitalizados do backend ("Downloaded", "Missing", etc.)
+  // ── derived state ──────────────────────────────────────────────────────────
+
   const byStatus = useMemo(() => {
     if (!summary?.byStatus) return {} as Record<string, number>;
-    return Object.fromEntries(
-      Object.entries(summary.byStatus).map(([k, v]) => [k.toLowerCase(), v])
-    ) as Record<string, number>;
+    return Object.fromEntries(Object.entries(summary.byStatus).map(([k, v]) => [k.toLowerCase(), v])) as Record<string, number>;
   }, [summary]);
+
   const downloadedTitles = byStatus.downloaded ?? 0;
   const missingEpisodes = summary?.missingEpisodes ?? 0;
   const totalStorage = summary ? fmtGb(summary.totalStorageGb) : "0.0 GB";
@@ -817,6 +376,8 @@ export function TrackerHome() {
   const streamLabelClass = streamState === "live" ? "text-[#a6e3a1]" : streamState === "fallback" ? "text-[#f9e2af]" : "text-[#6c7086]";
   const runtimeModeLabel = allowSimulatedDownloads === "true" ? "sim-on" : "real-only";
   const runtimeModeClass = allowSimulatedDownloads === "true" ? "text-[#f9e2af]" : "text-[#a6e3a1]";
+
+  // ── render ─────────────────────────────────────────────────────────────────
 
   return (
     <div
@@ -965,15 +526,9 @@ export function TrackerHome() {
               isLoadingMeta={isLoadingMeta}
               episodes={episodes}
               selectedEpisodes={selectedEpisodes}
-              onToggleEpisode={(episodeKey) =>
-                setSelectedEpisodes((cur) =>
-                  cur.includes(episodeKey)
-                    ? cur.filter((key) => key !== episodeKey)
-                    : [...cur, episodeKey]
-                )
-              }
-              onSelectAll={() => setSelectedEpisodes(episodes.map((e) => e.key))}
-              onClearAll={() => setSelectedEpisodes([])}
+              onToggleEpisode={toggleEpisode}
+              onSelectAll={selectAllEpisodes}
+              onClearAll={clearAllEpisodes}
               isLoadingEpisodes={isLoadingEpisodes}
               downloadPath={downloadPath}
               onQueueSelected={handleQueueSelected}
@@ -997,6 +552,7 @@ export function TrackerHome() {
           </div>
         </footer>
       </div>
+
       <ConfirmDialog
         open={!!deleteDialogTarget}
         title="Remover Da Biblioteca?"
@@ -1004,8 +560,7 @@ export function TrackerHome() {
           deleteDialogTarget ? (
             <>
               Remover <span className="font-bold text-[#e0e0ed]">{deleteDialogTarget.title}</span> da biblioteca?
-              <br />
-              <br />
+              <br /><br />
               Isso remove apenas o registro do banco. Arquivos locais nao sao apagados.
             </>
           ) : null

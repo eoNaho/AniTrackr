@@ -1,6 +1,11 @@
 /**
  * Auto-scheduler: verifica séries em lançamento e enfileira novos episódios automaticamente.
- * Roda a cada hora.
+ *
+ * Estratégia inteligente:
+ * - Verifica a cada 5 minutos (antes: 1 hora)
+ * - Atualiza metadados AniList (next_release) a cada hora para todas as séries
+ * - Só consulta o provider quando o episódio está a ≤30 min de lançar ou já lançou
+ *   → evita scraping desnecessário em séries que lançam daqui a dias
  */
 
 import db from "../db/index.ts";
@@ -9,15 +14,18 @@ import { getEpisodesWithFallback, type Provider } from "./provider-chain.ts";
 import { enqueueDownloads } from "./downloader.ts";
 import { logger } from "../utils/logger.ts";
 
-const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // 5 minutos
+const ANILIST_REFRESH_MS = 60 * 60 * 1000;      // 1 hora
+const RELEASE_WINDOW_MS  = 30 * 60 * 1000;      // 30 min antes do lançamento
+
 let _schedulerInterval: ReturnType<typeof setInterval> | null = null;
+let _lastAniListRefresh = 0;
 
 export function startAutoScheduler() {
   if (_schedulerInterval) clearInterval(_schedulerInterval);
   // Primeira verificação após 2 minutos (deixa o servidor inicializar)
   const boot = setTimeout(() => void checkAndSchedule(), 2 * 60 * 1000);
   _schedulerInterval = setInterval(() => void checkAndSchedule(), CHECK_INTERVAL_MS);
-  // Retorna cleanup para testes
   return () => { clearTimeout(boot); if (_schedulerInterval) clearInterval(_schedulerInterval); };
 }
 
@@ -30,9 +38,11 @@ async function checkAndSchedule() {
     source_url: string | null;
     downloaded_count: number;
     season_number: number;
+    next_release: string | null;
     auto_download: number;
   }, []>(
-    `SELECT a.id, a.title, a.anilist_id, a.provider, a.source_url, a.downloaded_count, a.season_number,
+    `SELECT a.id, a.title, a.anilist_id, a.provider, a.source_url, a.downloaded_count,
+            a.season_number, a.next_release,
             COALESCE(r.auto_download, 1) AS auto_download
      FROM animes a
      LEFT JOIN anime_rules r ON r.anime_id = a.id
@@ -43,17 +53,49 @@ async function checkAndSchedule() {
   ).all();
 
   if (!releasing.length) return;
-  logger.info("auto-schedule", `verificando ${releasing.length} série(s) em lançamento`);
+
+  const now = Date.now();
+  const shouldRefreshMeta = now - _lastAniListRefresh > ANILIST_REFRESH_MS;
+
+  // 1. Atualiza next_release via AniList (operação leve, 1x/hora)
+  if (shouldRefreshMeta) {
+    _lastAniListRefresh = now;
+    logger.info("auto-schedule", `atualizando metadados AniList para ${releasing.length} série(s)`);
+    for (const anime of releasing) {
+      if (!anime.anilist_id) continue;
+      try {
+        const data = await getAniListAnime(anime.anilist_id).catch(() => null);
+        const nextReleaseIso = data?.nextAiringEpisode?.airingAt
+          ? new Date(data.nextAiringEpisode.airingAt * 1000).toISOString()
+          : null;
+        db.run(`UPDATE animes SET next_release = ?, updated_at = datetime('now') WHERE id = ?`, [nextReleaseIso, anime.id]);
+        // Atualiza objeto local para usar na próxima etapa
+        anime.next_release = nextReleaseIso;
+      } catch (err) {
+        logger.warn("auto-schedule", `AniList falhou para "${anime.title}": ${err}`);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  // 2. Filtra apenas séries com episódio próximo ou sem data conhecida
+  const toCheck = releasing.filter((anime) => {
+    if (!anime.next_release) return true; // data desconhecida → sempre verifica
+    const releaseMs = new Date(anime.next_release).getTime();
+    return releaseMs <= now + RELEASE_WINDOW_MS; // já lançou ou vai lançar em ≤30 min
+  });
+
+  if (!toCheck.length) return;
+  logger.info("auto-schedule", `verificando provider para ${toCheck.length} série(s) com episódio próximo`);
 
   let totalQueued = 0;
-  for (const anime of releasing) {
+  for (const anime of toCheck) {
     try {
-      const queued = await checkAnime(anime);
+      const queued = await checkAndQueueNewEpisodes(anime);
       totalQueued += queued;
     } catch (err) {
       logger.warn("auto-schedule", `erro em "${anime.title}": ${err}`);
     }
-    // Throttle entre animes para não sobrecarregar providers
     await new Promise((r) => setTimeout(r, 1000));
   }
 
@@ -61,10 +103,9 @@ async function checkAndSchedule() {
     logger.info("auto-schedule", `${totalQueued} novo(s) episódio(s) enfileirado(s)`);
 }
 
-async function checkAnime(anime: {
+async function checkAndQueueNewEpisodes(anime: {
   id: string;
   title: string;
-  anilist_id: number;
   provider: string;
   source_url: string | null;
   downloaded_count: number;
@@ -72,15 +113,6 @@ async function checkAnime(anime: {
 }): Promise<number> {
   if (!anime.source_url) return 0;
 
-  if (anime.anilist_id) {
-    const anilistData = await getAniListAnime(anime.anilist_id).catch(() => null);
-    const nextReleaseIso = anilistData?.nextAiringEpisode?.airingAt
-      ? new Date(anilistData.nextAiringEpisode.airingAt * 1000).toISOString()
-      : null;
-    db.run(`UPDATE animes SET next_release = ?, updated_at = datetime('now') WHERE id = ?`, [nextReleaseIso, anime.id]);
-  }
-
-  // Episódios já baixados ou em fila
   const existing = new Set(
     db.query<{ episode_number: number }, [string]>(
       `SELECT DISTINCT episode_number FROM downloads
@@ -90,11 +122,7 @@ async function checkAnime(anime: {
 
   const maxExisting = existing.size > 0 ? Math.max(...existing) : anime.downloaded_count;
 
-  // Busca episódios disponíveis no provider (usa cache se recente)
-  const available = await getEpisodesWithFallback(
-    anime.source_url,
-    anime.provider as Provider
-  );
+  const available = await getEpisodesWithFallback(anime.source_url, anime.provider as Provider);
   if (!available.length) return 0;
 
   const newEps = available.filter((ep) => ep.number > maxExisting && !existing.has(ep.number));

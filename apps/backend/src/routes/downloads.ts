@@ -146,6 +146,50 @@ export const downloadRoutes = new Elysia()
 
   .get("/downloads/health", () => getDownloaderHealth())
 
+  .get("/downloads/analytics", () => {
+    const downloadsPerDay = db.query<{ date: string; count: number; total_bytes: number }, []>(`
+      SELECT
+        date(completed_at) as date,
+        COUNT(*) as count,
+        COALESCE(SUM(total_bytes), 0) as total_bytes
+      FROM downloads
+      WHERE status = 'completed'
+        AND completed_at IS NOT NULL
+        AND completed_at > datetime('now', '-14 days')
+      GROUP BY date(completed_at)
+      ORDER BY date ASC
+    `).all();
+
+    const totals = db.query<{ total_bytes: number; total_count: number; avg_speed_kbps: number }, []>(`
+      SELECT
+        COALESCE(SUM(total_bytes), 0) as total_bytes,
+        COUNT(*) as total_count,
+        COALESCE(AVG(NULLIF(speed_kbps, 0)), 0) as avg_speed_kbps
+      FROM downloads
+      WHERE status = 'completed'
+    `).get() ?? { total_bytes: 0, total_count: 0, avg_speed_kbps: 0 };
+
+    const byProvider = db.query<{ provider: string; count: number }, []>(`
+      SELECT provider, COUNT(*) as count
+      FROM downloads
+      WHERE status = 'completed'
+      GROUP BY provider
+      ORDER BY count DESC
+    `).all();
+
+    const topAnimes = db.query<{ anime_title: string; count: number }, []>(`
+      SELECT a.title as anime_title, COUNT(d.id) as count
+      FROM downloads d
+      JOIN animes a ON a.id = d.anime_id
+      WHERE d.status = 'completed'
+      GROUP BY d.anime_id
+      ORDER BY count DESC
+      LIMIT 5
+    `).all();
+
+    return { downloadsPerDay, totals, byProvider, topAnimes };
+  })
+
   .post("/downloads/:id/retry", ({ params }) => {
     const ok = retryDownload(params.id);
     if (!ok) return { error: "Job nao encontrado para retry (status permitido: failed/cancelled/retry_wait)" };

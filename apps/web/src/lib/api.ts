@@ -859,3 +859,13 @@ export const updateWatchStatus = (animeId: string, watchStatus: WatchStatus) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ watch_status: watchStatus }),
   });
+
+export type DownloadAnalytics = {
+  downloadsPerDay: { date: string; count: number; total_bytes: number }[];
+  totals: { total_bytes: number; total_count: number; avg_speed_kbps: number };
+  byProvider: { provider: string; count: number }[];
+  topAnimes: { anime_title: string; count: number }[];
+};
+
+export const fetchDownloadAnalytics = () =>
+  requestJson<DownloadAnalytics>("/api/downloads/analytics");
