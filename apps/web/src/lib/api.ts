@@ -195,6 +195,50 @@ export async function fetchDownloadStats() {
   return requestJson<Record<string, number | string | unknown[]>>("/api/downloads/stats");
 }
 
+// ── API Keys ──────────────────────────────────────────────────────────────────
+
+export type ApiKey = {
+  id: string;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  status: "active" | "revoked" | "expired";
+};
+
+export type CreatedApiKey = ApiKey & {
+  key: string; // bruta — exibida apenas uma vez
+  warning: string;
+};
+
+export async function fetchApiKeys() {
+  return requestJson<{ keys: ApiKey[]; availableScopes: string[] }>("/api/api-keys");
+}
+
+export async function createApiKey(label: string, scopes: string[], expiresAt?: string) {
+  return requestJsonWithBodyError<CreatedApiKey>("/api/api-keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, scopes, expiresAt: expiresAt || undefined }),
+  });
+}
+
+export async function revokeApiKey(id: string) {
+  return requestJsonWithBodyError<{ ok: boolean; message: string }>(`/api/api-keys/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchApiKeyAudit(id: string) {
+  return requestJson<{
+    logs: { route: string; method: string; status_code: number; duration_ms: number; created_at: string; error_code: string | null }[];
+  }>(`/api/api-keys/${id}/audit`);
+}
+
+// ── Backup ────────────────────────────────────────────────────────────────────
+
 export function getBackupExportUrl() {
   return `${getBackendUrl()}/api/backup/export`;
 }

@@ -18,6 +18,8 @@ import { discoverRoutes } from "./routes/discover.ts";
 import { queueProfileRoutes } from "./routes/queue-profiles.ts";
 import { updateRoutes, CURRENT_VERSION } from "./routes/update.ts";
 import { backupRoutes } from "./routes/backup.ts";
+import { apiKeyRoutes } from "./routes/api-keys.ts";
+import { externalApiRoutes } from "./routes/external-api.ts";
 import { hasOpenSubtitlesKey } from "./services/opensubtitles.ts";
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
@@ -31,7 +33,7 @@ const app = new Elysia()
   .use(cors({
     origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "Idempotency-Key"],
     credentials: true,
   }))
 
@@ -66,6 +68,8 @@ const app = new Elysia()
       .use(queueProfileRoutes)
       .use(updateRoutes)
       .use(backupRoutes)
+      .use(apiKeyRoutes)
+      .use(externalApiRoutes)
       // ── Auto-schedule (registrado aqui para garantir que o módulo já foi inicializado) ──
       .get("/auto-schedule/status", () => getAutoScheduleStatus())
       .post("/auto-schedule/run", async () => {

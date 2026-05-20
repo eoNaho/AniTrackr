@@ -21,6 +21,12 @@ import {
   fetchBackupList,
   testWebhookNotification,
   restoreBackup,
+  fetchApiKeys,
+  createApiKey,
+  revokeApiKey,
+  fetchApiKeyAudit,
+  type ApiKey,
+  type CreatedApiKey,
   type ProviderHealthEntry,
   type QbtConnectionStatus,
   type DownloadHistoryMonth,
@@ -405,6 +411,245 @@ const DEFAULTS: ConfigState = {
   // Disco
   disk_alert_threshold_gb: "2",
 };
+
+// ── API Keys ──────────────────────────────────────────────────────────────────
+
+const SCOPE_LABELS: Record<string, string> = {
+  "search:read":   "Buscar animes",
+  "library:read":  "Ler biblioteca",
+  "downloads:read":"Ver downloads",
+  "queue:write":   "Enfileirar downloads",
+  "config:read":   "Ler configurações",
+  "admin":         "Acesso total",
+};
+
+function ApiKeysPanel() {
+  const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [availableScopes, setAvailableScopes] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [label, setLabel] = useState("");
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(["search:read", "library:read", "downloads:read"]);
+  const [expiresAt, setExpiresAt] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newKey, setNewKey] = useState<CreatedApiKey | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [auditKeyId, setAuditKeyId] = useState<string | null>(null);
+  const [auditLogs, setAuditLogs] = useState<{ route: string; status_code: number; duration_ms: number; created_at: string }[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetchApiKeys();
+      setKeys(res.keys);
+      setAvailableScopes(res.availableScopes);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  function toggleScope(scope: string) {
+    setSelectedScopes((prev) =>
+      prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope]
+    );
+  }
+
+  async function handleCreate() {
+    if (!label.trim()) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const key = await createApiKey(label.trim(), selectedScopes, expiresAt || undefined);
+      setNewKey(key);
+      setLabel("");
+      setExpiresAt("");
+      setSelectedScopes(["search:read", "library:read", "downloads:read"]);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleRevoke(id: string) {
+    await revokeApiKey(id).catch(() => {});
+    await load();
+  }
+
+  async function handleAudit(id: string) {
+    if (auditKeyId === id) { setAuditKeyId(null); return; }
+    setAuditKeyId(id);
+    const res = await fetchApiKeyAudit(id).catch(() => ({ logs: [] }));
+    setAuditLogs(res.logs);
+  }
+
+  function handleCopy() {
+    if (!newKey) return;
+    navigator.clipboard.writeText(newKey.key).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }
+
+  const statusColor = (s: string) =>
+    s === "active" ? "text-[#a6e3a1]" : s === "expired" ? "text-[#f9e2af]" : "text-[#f38ba8]";
+
+  return (
+    <Panel title="[API KEYS]" className="md:col-span-2 xl:col-span-3">
+      <div className="p-3 space-y-4">
+        {/* Chave recém-criada */}
+        {newKey && (
+          <div className="border border-[#a6e3a1]/40 bg-[#a6e3a1]/5 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] font-bold text-[#a6e3a1]">✓ Chave criada — guarde agora, não será exibida novamente</span>
+              <button onClick={() => setNewKey(null)} className="text-[#6c7086] hover:text-[#e0e0ed] text-[14px]">✕</button>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 break-all bg-black/30 px-2 py-1.5 text-[11px] font-mono text-[#cba6f7] select-all">
+                {newKey.key}
+              </code>
+              <button
+                onClick={handleCopy}
+                className="shrink-0 border border-[#45475a] px-3 py-1.5 text-[11px] text-[#bac2de] hover:border-[#cba6f7] hover:text-[#cba6f7]"
+              >
+                {copied ? "✓ copiado" : "copiar"}
+              </button>
+            </div>
+            <p className="text-[11px] text-[#6c7086]">
+              Use: <code className="text-[#89dceb]">Authorization: Bearer {newKey.key.slice(0, 18)}...</code>
+            </p>
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* Formulário de criação */}
+          <div className="space-y-3">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-[#cba6f7]">Nova chave</div>
+            <div>
+              <label className={labelCls}>nome da chave</label>
+              <input
+                className={inputCls}
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="bot-discord, script-backup, ..."
+                maxLength={80}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>escopos</label>
+              <div className="space-y-1">
+                {availableScopes.map((scope) => (
+                  <label key={scope} className="flex items-center gap-2 cursor-pointer text-[12px]">
+                    <input
+                      type="checkbox"
+                      checked={selectedScopes.includes(scope)}
+                      onChange={() => toggleScope(scope)}
+                      className="accent-[#cba6f7]"
+                    />
+                    <span className="font-mono text-[#89dceb]">{scope}</span>
+                    <span className="text-[#6c7086]">— {SCOPE_LABELS[scope] ?? scope}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>expiração (opcional)</label>
+              <input
+                type="date"
+                className={inputCls}
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+              />
+            </div>
+            {error && <p className="text-[11px] text-[#f38ba8]">{error}</p>}
+            <button
+              onClick={() => void handleCreate()}
+              disabled={creating || !label.trim() || !selectedScopes.length}
+              className="border border-[#cba6f7] bg-[#cba6f7] px-4 py-1.5 text-[12px] font-bold text-[#0f0f14] hover:opacity-90 disabled:opacity-40"
+            >
+              {creating ? "gerando..." : "gerar API key"}
+            </button>
+          </div>
+
+          {/* Lista de chaves */}
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wider text-[#cba6f7] mb-2">
+              Chaves existentes {loading && <span className="text-[#6c7086]">(carregando...)</span>}
+            </div>
+            {keys.length === 0 && !loading && (
+              <p className="text-[12px] text-[#6c7086]">Nenhuma chave criada ainda.</p>
+            )}
+            <div className="space-y-2">
+              {keys.map((key) => (
+                <div key={key.id} className="border border-[#2a2a38] bg-[#0d0d12] p-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[12px] font-bold text-[#e0e0ed] truncate">{key.label}</span>
+                        <span className={`text-[10px] font-bold uppercase ${statusColor(key.status)}`}>{key.status}</span>
+                      </div>
+                      <div className="text-[11px] font-mono text-[#6c7086]">{key.prefix}···</div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {key.scopes.map((s) => (
+                          <span key={s} className="border border-[#45475a] px-1 text-[10px] text-[#89dceb]">{s}</span>
+                        ))}
+                      </div>
+                      <div className="mt-1 text-[10px] text-[#6c7086]">
+                        criada {new Date(key.createdAt).toLocaleDateString("pt-BR")}
+                        {key.lastUsedAt && ` · uso ${new Date(key.lastUsedAt).toLocaleDateString("pt-BR")}`}
+                        {key.expiresAt && ` · expira ${new Date(key.expiresAt).toLocaleDateString("pt-BR")}`}
+                      </div>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => void handleAudit(key.id)}
+                        className="border border-[#45475a] px-2 py-0.5 text-[10px] text-[#6c7086] hover:border-[#89dceb] hover:text-[#89dceb]"
+                      >
+                        log
+                      </button>
+                      {key.status === "active" && (
+                        <button
+                          onClick={() => void handleRevoke(key.id)}
+                          className="border border-[#45475a] px-2 py-0.5 text-[10px] text-[#6c7086] hover:border-[#f38ba8] hover:text-[#f38ba8]"
+                        >
+                          revogar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {auditKeyId === key.id && (
+                    <div className="mt-2 border-t border-[#2a2a38] pt-2 space-y-0.5 max-h-32 overflow-y-auto">
+                      {auditLogs.length === 0 ? (
+                        <p className="text-[10px] text-[#6c7086]">Sem registros ainda.</p>
+                      ) : auditLogs.map((log, i) => (
+                        <div key={i} className="flex items-center gap-2 text-[10px]">
+                          <span className={log.status_code >= 400 ? "text-[#f38ba8]" : "text-[#a6e3a1]"}>{log.status_code}</span>
+                          <span className="font-mono text-[#6c7086]">{log.route}</span>
+                          <span className="ml-auto text-[#45475a]">{log.duration_ms}ms</span>
+                          <span className="text-[#45475a]">{new Date(log.created_at).toLocaleTimeString("pt-BR")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-[#45475a] pt-2 text-[11px] text-[#6c7086]">
+          Use <code className="text-[#89dceb]">Authorization: Bearer &lt;key&gt;</code> em bots, scripts e integrações externas.
+          Docs: <code className="text-[#6c7086]">docs/api-publica.md</code>
+        </div>
+      </div>
+    </Panel>
+  );
+}
 
 // ── Webhook Notifications ─────────────────────────────────────────────────────
 
@@ -952,6 +1197,9 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
       {/* Grid de Seções */}
       <div className="flex min-h-0 flex-1 overflow-y-auto pr-1" style={{ scrollbarWidth: "thin", scrollbarColor: "#45475a #0d0d12" }}>
         <div className="grid w-full grid-cols-1 gap-3 auto-rows-min grid-flow-row-dense md:grid-cols-2 xl:grid-cols-3">
+
+          {/* API Keys */}
+          <ApiKeysPanel />
 
           {/* Download */}
           <Panel title="[DOWNLOAD]">

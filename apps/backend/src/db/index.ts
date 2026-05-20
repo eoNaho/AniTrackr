@@ -203,6 +203,37 @@ db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_episode ON downloads(anime_id, 
 db.run(`CREATE INDEX IF NOT EXISTS idx_downloads_type_status ON downloads(download_type, status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_animes_tracked_status ON animes(is_tracked, anilist_status)`);
 
+// ── api_keys ───────────────────────────────────────────────────────────────
+db.run(`
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id           TEXT PRIMARY KEY,
+    label        TEXT NOT NULL,
+    key_prefix   TEXT NOT NULL,
+    key_hash     TEXT NOT NULL UNIQUE,
+    scopes_json  TEXT NOT NULL DEFAULT '[]',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT,
+    expires_at   TEXT,
+    revoked_at   TEXT
+  )
+`);
+
+// ── api_audit_log ──────────────────────────────────────────────────────────
+db.run(`
+  CREATE TABLE IF NOT EXISTS api_audit_log (
+    id          TEXT PRIMARY KEY,
+    api_key_id  TEXT NOT NULL,
+    route       TEXT NOT NULL,
+    method      TEXT NOT NULL,
+    status_code INTEGER,
+    duration_ms INTEGER,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    error_code  TEXT
+  )
+`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_apikeys_hash ON api_keys(key_hash)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_audit_key ON api_audit_log(api_key_id, created_at)`);
+
 // ── config ─────────────────────────────────────────────────────────────────
 db.run(`
   CREATE TABLE IF NOT EXISTS config (
