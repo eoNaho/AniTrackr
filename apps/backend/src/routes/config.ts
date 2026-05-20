@@ -4,7 +4,7 @@ import { logger } from "../utils/logger.ts";
 
 type ConfigRow = { key: string; value: string };
 
-const SENSITIVE_KEYS = new Set(["qbittorrent_password"]);
+const SENSITIVE_KEYS = new Set(["qbittorrent_password", "opensubtitles_password"]);
 const MASK = "***";
 
 const ALLOWED_KEYS = new Set([
@@ -19,6 +19,8 @@ const ALLOWED_KEYS = new Set([
   "qbittorrent_username", "qbittorrent_password", "qbittorrent_save_path",
   // Nyaa
   "nyaa_preferred_group", "nyaa_preferred_resolution", "nyaa_default_category",
+  // OpenSubtitles
+  "opensubtitles_api_key", "opensubtitles_username", "opensubtitles_password",
 ]);
 
 function maskValue(key: string, value: string): string {

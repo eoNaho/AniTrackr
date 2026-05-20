@@ -1,6 +1,6 @@
 import Elysia, { t } from "elysia";
 import { existsSync } from "fs";
-import { searchSubtitles, getDownloadLink, fetchAndSaveSubtitle } from "../services/opensubtitles.ts";
+import { searchSubtitles, getDownloadLink, fetchAndSaveSubtitle, downloadSubtitle } from "../services/opensubtitles.ts";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
 
@@ -62,8 +62,6 @@ export const subtitleRoutes = new Elysia({ prefix: "/subtitles" })
     const dlInfo = await getDownloadLink(fileId);
     if (!dlInfo) return { error: "Não foi possível obter link de download" };
 
-    const { fetchAndSaveSubtitle: _unused, ...__ } = await import("../services/opensubtitles.ts");
-    const { downloadSubtitle } = await import("../services/opensubtitles.ts");
     const srtPath = await downloadSubtitle(dlInfo.link, ep.file_path, language ?? "pt-BR", dlInfo.fileName);
 
     if (!srtPath) return { error: "Falha ao baixar legenda" };

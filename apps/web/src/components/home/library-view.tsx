@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import type { DownloadJob } from "@/lib/api";
-import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan, batchLibraryAction } from "@/lib/api";
+import React, { useMemo, useState, useEffect } from "react";
+import type { DownloadJob, BackendProvider } from "@/lib/api";
+import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan, batchLibraryAction, fetchSearchProviders } from "@/lib/api";
 import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, ConfirmDialog, generateBar, statusBadgeClass, statusColor } from "./ui";
 import { EpisodeList } from "./episode-list";
 import { AnimeRulesPanel } from "./anime-rules-panel";
@@ -90,6 +90,13 @@ export function LibraryView({
   const [showProviderSelect, setShowProviderSelect] = useState(false);
   const [batchProvider, setBatchProvider] = useState("animefire");
   const [isQueueMonitorCollapsed, setIsQueueMonitorCollapsed] = useState(false);
+  const [availableProviders, setAvailableProviders] = useState<BackendProvider[]>([]);
+
+  useEffect(() => {
+    fetchSearchProviders()
+      .then((res) => { if (res.providers.length) setAvailableProviders(res.providers); })
+      .catch(() => {});
+  }, []);
 
   const filteredAnimes = useMemo(() => {
     const q = filter.toLowerCase();
@@ -286,7 +293,10 @@ export function LibraryView({
               {showProviderSelect ? (
                 <>
                   <select value={batchProvider} onChange={(e) => setBatchProvider(e.target.value)} className="border border-[#45475a] bg-[#0f0f14] px-1 py-0.5 text-[11px] text-[#e0e0ed] outline-none">
-                    {["animefire","goyabu","animedrive","superflix","dattebayo","allanime","nineanime"].map((p) => (
+                    {(availableProviders.length > 0
+                      ? availableProviders.map((p) => p.name)
+                      : ["animefire","goyabu","animedrive","superflix","dattebayo","allanime","nineanime"]
+                    ).map((p) => (
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>
@@ -598,6 +608,13 @@ export function LibraryView({
                 </tr>
               </thead>
               <tbody>
+                {downloads.length > 80 && (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-1.5 text-center text-[11px] text-[#f9e2af]">
+                      Mostrando 80 de {downloads.length} jobs — use filtros ou cancele jobs concluídos para ver o restante
+                    </td>
+                  </tr>
+                )}
                 {downloads.slice(0, 80).map((job) => {
                   const canCancel = job.status === "queued" || job.status === "downloading" || job.status === "retry_wait";
                   const canRetry = job.status === "failed" || job.status === "cancelled" || job.status === "retry_wait";

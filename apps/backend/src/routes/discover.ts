@@ -74,7 +74,7 @@ const DEFAULT_GENRES = [
 export const discoverRoutes = new Elysia({ prefix: "/discover" })
   .get("/", async ({ query }) => {
     const { basedOn } = query;
-    if (!basedOn) return { error: "ParÃ¢metro basedOn Ã© obrigatÃ³rio" };
+    if (!basedOn) return { error: "Parâmetro basedOn é obrigatório" };
 
     const anime = db.query<{
       anilist_id: number | null; title: string; genres: string;
@@ -83,7 +83,7 @@ export const discoverRoutes = new Elysia({ prefix: "/discover" })
     `).get(basedOn);
 
     if (!anime?.anilist_id) {
-      return { basedOn, recommendations: [], reason: "Sem anilist_id para buscar recomendaÃ§Ãµes" };
+      return { basedOn, recommendations: [], reason: "Sem anilist_id para buscar recomendações" };
     }
 
     const anilistData = await getAniListAnime(anime.anilist_id).catch(() => null);
@@ -158,7 +158,10 @@ export const discoverRoutes = new Elysia({ prefix: "/discover" })
       },
     } as const;
 
-    const selectedStrategy = strategies[mode as keyof typeof strategies] ?? strategies.mixed;
+    const validModes = Object.keys(strategies) as (keyof typeof strategies)[];
+    const selectedStrategy = validModes.includes(mode as keyof typeof strategies)
+      ? strategies[mode as keyof typeof strategies]
+      : strategies.mixed;
     const page = Math.max(1, Math.floor(Math.random() * 6) + 1);
 
     const primaryBatch = await browseAniList({

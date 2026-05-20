@@ -93,7 +93,7 @@ export async function searchSubtitles(params: {
   imdbId?: string;
   tmdbId?: number;
 }): Promise<SubSearchResult> {
-  if (!API_KEY) {
+  if (!getOsConfig().apiKey) {
     logger.warn("opensubtitles", "OPENSUBTITLES_API_KEY não configurada — usando busca pública limitada");
   }
 
