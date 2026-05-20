@@ -21,6 +21,12 @@ const ALLOWED_KEYS = new Set([
   "nyaa_preferred_group", "nyaa_preferred_resolution", "nyaa_default_category",
   // OpenSubtitles
   "opensubtitles_api_key", "opensubtitles_username", "opensubtitles_password",
+  // Auto-legenda pós-download
+  "auto_subtitle_enabled",
+  // Webhook notifications
+  "webhook_enabled", "webhook_url", "webhook_type",
+  // Alertas de disco
+  "disk_alert_threshold_gb",
 ]);
 
 function maskValue(key: string, value: string): string {

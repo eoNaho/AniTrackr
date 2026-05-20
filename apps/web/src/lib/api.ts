@@ -195,6 +195,32 @@ export async function fetchDownloadStats() {
   return requestJson<Record<string, number | string | unknown[]>>("/api/downloads/stats");
 }
 
+export function getBackupExportUrl() {
+  return `${getBackendUrl()}/api/backup/export`;
+}
+
+export async function fetchBackupList() {
+  return requestJson<{ backups: { name: string; sizeKb: number; mtime: string }[] }>("/api/backup/list");
+}
+
+export async function testWebhookNotification(url: string, type: string) {
+  return requestJsonWithBodyError<{ ok: boolean; error?: string }>("/api/backup/test-webhook", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, type }),
+  });
+}
+
+export async function restoreBackup(file: File) {
+  const text = await file.text();
+  const data = JSON.parse(text) as unknown;
+  return requestJsonWithBodyError<{ ok: boolean; restored: Record<string, number> }>("/api/backup/restore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
 export async function fetchDownloads(status?: string) {
   const params = status ? `?${new URLSearchParams({ status }).toString()}` : "";
   return requestJson<DownloadsResponse>(`/api/downloads${params}`);

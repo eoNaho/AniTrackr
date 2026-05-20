@@ -17,6 +17,7 @@ import { integrityRoutes } from "./routes/integrity.ts";
 import { discoverRoutes } from "./routes/discover.ts";
 import { queueProfileRoutes } from "./routes/queue-profiles.ts";
 import { updateRoutes, CURRENT_VERSION } from "./routes/update.ts";
+import { backupRoutes } from "./routes/backup.ts";
 import { hasOpenSubtitlesKey } from "./services/opensubtitles.ts";
 import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
@@ -64,6 +65,7 @@ const app = new Elysia()
       .use(discoverRoutes)
       .use(queueProfileRoutes)
       .use(updateRoutes)
+      .use(backupRoutes)
       // ── Auto-schedule (registrado aqui para garantir que o módulo já foi inicializado) ──
       .get("/auto-schedule/status", () => getAutoScheduleStatus())
       .post("/auto-schedule/run", async () => {

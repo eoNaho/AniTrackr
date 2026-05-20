@@ -17,6 +17,10 @@ import {
   deleteQueueProfile,
   fetchUpdateCheck,
   forceUpdateCheck,
+  getBackupExportUrl,
+  fetchBackupList,
+  testWebhookNotification,
+  restoreBackup,
   type ProviderHealthEntry,
   type QbtConnectionStatus,
   type DownloadHistoryMonth,
@@ -392,7 +396,151 @@ const DEFAULTS: ConfigState = {
   opensubtitles_api_key: "",
   opensubtitles_username: "",
   opensubtitles_password: "",
+  // Auto-legenda
+  auto_subtitle_enabled: "false",
+  // Webhook
+  webhook_enabled: "false",
+  webhook_url: "",
+  webhook_type: "discord",
+  // Disco
+  disk_alert_threshold_gb: "2",
 };
+
+// ── Webhook Notifications ─────────────────────────────────────────────────────
+
+function WebhookPanel({ cfg, set, setBool, className }: { cfg: ConfigState; set: (k: string, v: string) => void; setBool: (k: string, v: boolean) => void; className?: string }) {
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  async function handleTest() {
+    if (!cfg.webhook_url) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await testWebhookNotification(cfg.webhook_url, cfg.webhook_type || "discord");
+      setTestResult(res.ok ? "✓ webhook enviado com sucesso" : `✗ ${res.error ?? "falhou"}`);
+    } catch (e) {
+      setTestResult(`✗ ${(e as Error).message}`);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <Panel title="[NOTIFICAÇÕES WEBHOOK]" className={className}>
+      <div className="p-3">
+        <div className="mb-3">
+          <Toggle value={cfg.webhook_enabled === "true"} onChange={(v) => setBool("webhook_enabled", v)} label="ativar notificações webhook" />
+        </div>
+        <Field label="URL do webhook">
+          <input
+            className={inputCls}
+            value={cfg.webhook_url}
+            onChange={(e) => set("webhook_url", e.target.value)}
+            placeholder="https://discord.com/api/webhooks/..."
+            disabled={cfg.webhook_enabled !== "true"}
+          />
+        </Field>
+        <Field label="tipo">
+          <select className={selectCls} value={cfg.webhook_type} onChange={(e) => set("webhook_type", e.target.value)} disabled={cfg.webhook_enabled !== "true"}>
+            <option value="discord">Discord</option>
+            <option value="gotify">Gotify</option>
+            <option value="generic">HTTP genérico</option>
+          </select>
+        </Field>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => void handleTest()}
+            disabled={testing || !cfg.webhook_url}
+            className="border border-[#45475a] px-3 py-1 text-[12px] text-[#bac2de] hover:border-[#cba6f7] hover:text-[#cba6f7] disabled:opacity-40"
+          >
+            {testing ? "enviando..." : "testar agora"}
+          </button>
+          {testResult && (
+            <span className={`text-[12px] ${testResult.startsWith("✓") ? "text-[#a6e3a1]" : "text-[#f38ba8]"}`}>{testResult}</span>
+          )}
+        </div>
+        <p className="mt-2 text-[11px] text-[#6c7086]">
+          Notifica ao completar ou falhar permanentemente um download. Suporta Discord (embed), Gotify e qualquer endpoint HTTP POST.
+        </p>
+      </div>
+    </Panel>
+  );
+}
+
+// ── Backup / Restore ──────────────────────────────────────────────────────────
+
+function BackupPanel() {
+  const [backups, setBackups] = useState<{ name: string; sizeKb: number; mtime: string }[]>([]);
+  const [restoreStatus, setRestoreStatus] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchBackupList().then((r) => setBackups(r.backups)).catch(() => {});
+  }, []);
+
+  async function handleRestore(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRestoring(true);
+    setRestoreStatus(null);
+    try {
+      const res = await restoreBackup(file);
+      setRestoreStatus(`✓ restaurado: ${res.restored.animes} animes, ${res.restored.episodes} episódios`);
+    } catch (err) {
+      setRestoreStatus(`✗ ${(err as Error).message}`);
+    } finally {
+      setRestoring(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  return (
+    <Panel title="[BACKUP / RESTORE]">
+      <div className="p-3 space-y-3">
+        <div>
+          <p className="text-[12px] text-[#bac2de] mb-2">
+            Export JSON inclui biblioteca, episódios, regras e configuração. Backup SQLite automático ocorre semanalmente.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={getBackupExportUrl()}
+              download
+              className="border border-[#45475a] px-3 py-1 text-[12px] text-[#bac2de] hover:border-[#cba6f7] hover:text-[#cba6f7]"
+            >
+              exportar JSON
+            </a>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={restoring}
+              className="border border-[#45475a] px-3 py-1 text-[12px] text-[#bac2de] hover:border-[#f38ba8] hover:text-[#f38ba8] disabled:opacity-40"
+            >
+              {restoring ? "restaurando..." : "restaurar JSON"}
+            </button>
+            <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={(e) => void handleRestore(e)} />
+          </div>
+          {restoreStatus && (
+            <p className={`mt-2 text-[12px] ${restoreStatus.startsWith("✓") ? "text-[#a6e3a1]" : "text-[#f38ba8]"}`}>{restoreStatus}</p>
+          )}
+        </div>
+        {backups.length > 0 && (
+          <div>
+            <p className="text-[11px] text-[#6c7086] uppercase tracking-wider mb-1">Backups SQLite automáticos</p>
+            <div className="space-y-0.5">
+              {backups.map((b) => (
+                <div key={b.name} className="flex justify-between text-[11px] text-[#6c7086]">
+                  <span className="font-mono">{b.name}</span>
+                  <span>{b.sizeKb} KB · {new Date(b.mtime).toLocaleDateString("pt-BR")}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
 
 // ── Queue Profiles ────────────────────────────────────────────────────────────
 
@@ -803,7 +951,7 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
 
       {/* Grid de Seções */}
       <div className="flex min-h-0 flex-1 overflow-y-auto pr-1" style={{ scrollbarWidth: "thin", scrollbarColor: "#45475a #0d0d12" }}>
-        <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 auto-rows-min">
+        <div className="grid w-full grid-cols-1 gap-3 auto-rows-min grid-flow-row-dense md:grid-cols-2 xl:grid-cols-3">
 
           {/* Download */}
           <Panel title="[DOWNLOAD]">
@@ -857,6 +1005,18 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
                   onChange={(v) => setBool("allow_simulated_downloads", v)}
                   label="downloads simulados (dev)"
                 />
+              </div>
+              <div className="mt-3 border-t border-[#45475a] pt-3">
+                <label className={labelCls}>alerta de disco baixo (GB livres)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  className={inputCls}
+                  value={cfg.disk_alert_threshold_gb}
+                  onChange={(e) => set("disk_alert_threshold_gb", e.target.value)}
+                />
+                <p className="mt-1 text-[11px] text-[#6c7086]">Alerta no log quando espaço livre cair abaixo deste valor. 0 = desativado.</p>
               </div>
             </div>
           </Panel>
@@ -1067,10 +1227,26 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
               {cfg.opensubtitles_api_key && (
                 <div className="mt-1 text-[11px] text-[#a6e3a1]">✓ API Key configurada</div>
               )}
+              <div className="mt-3 border-t border-[#45475a] pt-3">
+                <Toggle
+                  value={cfg.auto_subtitle_enabled === "true"}
+                  onChange={(v) => setBool("auto_subtitle_enabled", v)}
+                  label="baixar legenda automática após download (providers inglês)"
+                />
+                <p className="mt-1 text-[11px] text-[#6c7086]">
+                  Ativa para allanime e nineanime. Requer API Key configurada acima.
+                </p>
+              </div>
             </div>
           </Panel>
 
-          {/* Atualização */}
+          {/* Backup — ocupa col 3 da linha NYAA+LEGENDAS */}
+          <BackupPanel />
+
+          {/* Webhook — col-span-2 para dar espaço ao campo de URL */}
+          <WebhookPanel cfg={cfg} set={set} setBool={setBool} className="md:col-span-2" />
+
+          {/* Atualização — col 3 da linha do Webhook */}
           <UpdatePanel />
 
           {/* Queue Profiles */}
@@ -1083,7 +1259,7 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
           <ProviderHealthPanel />
 
           {/* Info / Atalhos */}
-          <Panel title="[ATALHOS]">
+          <Panel title="[ATALHOS]" className="md:col-span-2">
             <div className="p-3 text-[12px] text-[#6c7086] space-y-2">
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 {[
@@ -1128,3 +1304,4 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
     </div>
   );
 }
+

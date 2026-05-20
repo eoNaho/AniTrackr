@@ -11,6 +11,26 @@ import { dattebayoSearch, dattebayoEpisodes, dattebayoStreamUrl } from "./datteb
 import { resolveDownloadSourceUrl } from "./source-resolver.ts";
 import { generateSingleEpisodeNfoAsync } from "./jellyfin.ts";
 import { getAniListAnime, resolveSeriesRootTitle } from "./anilist.ts";
+import { notifyDownloadComplete, notifyDownloadFailed } from "./notifications.ts";
+import { hasOpenSubtitlesKey, fetchAndSaveSubtitle } from "./opensubtitles.ts";
+
+// Providers que entregam conteúdo em inglês — legenda automática ativada para eles
+const ENGLISH_PROVIDERS = new Set(["allanime", "nineanime", "nyaa"]);
+
+// Erros que não devem gerar retry (problema permanente no provider/fonte)
+const NO_RETRY_ERROR_CODES = new Set(["auth_error", "geo_blocked", "source_not_found"]);
+
+function getFreeSpaceGb(path: string): number {
+  try {
+    const result = Bun.spawnSync(["df", "-k", "--output=avail", path]);
+    if (result.exitCode !== 0) return Infinity;
+    const lines = new TextDecoder().decode(result.stdout).trim().split("\n");
+    const kbFree = parseInt(lines[lines.length - 1]?.trim() ?? "0", 10);
+    return kbFree / (1024 * 1024); // KB → GB
+  } catch {
+    return Infinity; // falha silenciosa — não bloqueia downloads
+  }
+}
 
 export type DownloadStatus = "queued" | "downloading" | "retry_wait" | "completed" | "failed" | "cancelled";
 const DOWNLOAD_UA =
@@ -830,11 +850,19 @@ function finalizeFailure(jobId: string, animeId: string, episode: number, season
   );
   updateAnimeDownloadState(animeId);
   logger.warn("downloader", JSON.stringify({ event: "failed", jobId, animeId, episode, season, errorCode }));
+
+  const failedTitle = db.query<{ title: string }, [string]>(
+    `SELECT title FROM animes WHERE id = ?`
+  ).get(animeId);
+  void notifyDownloadFailed(failedTitle?.title ?? animeId, episode, season, errorCode);
+
   kickQueue(150);
 }
 
 function scheduleAutoRetry(jobId: string, reason: string, errorCode: string): boolean {
   if (!isAutoRetryEnabled()) return false;
+  // Erros permanentes não devem gerar retry — falham imediatamente
+  if (NO_RETRY_ERROR_CODES.has(errorCode)) return false;
 
   const job = getJobRow(jobId);
   if (!job) return false;
@@ -933,8 +961,34 @@ function completeJob(jobId: string, animeId: string, episode: number, season: nu
 
   logger.info("downloader", JSON.stringify({ event: "completed", jobId, animeId, episode, season, bytes: totalBytes }));
 
-  // Gera NFO Jellyfin e busca metadados Jikan de forma assíncrona (não bloqueia)
+  // Gera NFO Jellyfin de forma assíncrona (não bloqueia)
   void generateSingleEpisodeNfoAsync(animeId, episode, season, filePath);
+
+  // Notificação webhook
+  const jobRow = db.query<{ provider: string; anime_id: string }, [string]>(
+    `SELECT provider, anime_id FROM downloads WHERE id = ?`
+  ).get(jobId);
+  const animeTitle = db.query<{ title: string; title_english: string | null }, [string]>(
+    `SELECT title, title_english FROM animes WHERE id = ?`
+  ).get(animeId);
+  void notifyDownloadComplete(animeTitle?.title ?? animeId, episode, season);
+
+  // Auto-legenda para providers em inglês
+  if (
+    jobRow && ENGLISH_PROVIDERS.has(jobRow.provider) &&
+    getConfig("auto_subtitle_enabled") === "true" &&
+    hasOpenSubtitlesKey()
+  ) {
+    const query = animeTitle?.title_english ?? animeTitle?.title ?? "";
+    if (query) {
+      void fetchAndSaveSubtitle({ query, season, episode, videoFilePath: filePath })
+        .then((path) => {
+          if (path) logger.info("downloader", `auto-subtitle saved: ${path}`);
+        })
+        .catch((e) => logger.warn("downloader", `auto-subtitle failed: ${e}`));
+    }
+  }
+
   kickQueue(100);
 }
 
@@ -1622,6 +1676,7 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
       );
     }
 
+    // Pula se já há download ativo para o episódio
     const existing = db.query<{
       id: string;
       status: DownloadStatus;
@@ -1636,6 +1691,27 @@ export function enqueueDownloads(animeId: string, episodes: number[], season = 1
     if (existing) {
       skippedCount += 1;
       continue;
+    }
+
+    // Pula se episódio já foi baixado com sucesso (evita redownload acidental)
+    const alreadyDone = db.query<{ status: string }, [string, number, number]>(
+      `SELECT status FROM episodes WHERE anime_id = ? AND number = ? AND season = ? AND status = 'downloaded' LIMIT 1`
+    ).get(animeId, effectiveEpisode, season);
+
+    if (alreadyDone) {
+      skippedCount += 1;
+      logger.info("downloader", JSON.stringify({ event: "enqueue_skip_already_downloaded", animeId, episode: effectiveEpisode, season }));
+      continue;
+    }
+
+    // Alerta se espaço em disco está abaixo do threshold configurado
+    const thresholdGb = parseFloat(getConfig("disk_alert_threshold_gb") || "2");
+    if (Number.isFinite(thresholdGb) && thresholdGb > 0) {
+      const downloadPath = getConfig("download_path") || (process.env.USERPROFILE ?? "/");
+      const freeGb = getFreeSpaceGb(downloadPath);
+      if (freeGb < thresholdGb) {
+        logger.warn("downloader", JSON.stringify({ event: "low_disk_space", freeGb: freeGb.toFixed(2), thresholdGb }));
+      }
     }
 
     const id = randomUUID();
