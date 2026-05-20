@@ -1105,3 +1105,89 @@ export const forceUpdateCheck = () =>
     `${getBackendUrl()}/api/update/check`,
     { method: "POST" }
   );
+
+// ── Jellyfin Connector ────────────────────────────────────────────────────────
+
+export type JellyfinTestResult = {
+  ok: boolean;
+  connected: boolean;
+  serverName?: string;
+  version?: string;
+  message: string;
+};
+
+export type JellyfinLibrary = {
+  id: string;
+  name: string;
+  collectionType: string;
+};
+
+export type JellyfinStatus = {
+  enabled: boolean;
+  configured: boolean;
+  baseUrl: string;
+  libraryId: string;
+  autoRefresh: boolean;
+  lastTestAt: string | null;
+  lastRefreshAt: string | null;
+  pendingRefreshes: number;
+  lastError: string | null;
+};
+
+export type JellyfinReadiness = {
+  enabledNamingScheme: string;
+  mediaPath: string;
+  mediaPathAccessible: boolean;
+  trackedSeries: number;
+  seriesWithoutTvshowNfo: number;
+  episodesMissingNfoTotal: number;
+  missingPoster: number;
+  missingFanart: number;
+  readyForJellyfin: boolean;
+};
+
+export type JellyfinAnimeReadiness = {
+  id: string;
+  title: string;
+  seriesPath: string;
+  hasTvshowNfo: boolean;
+  hasPoster: boolean;
+  hasFanart: boolean;
+  episodesMissingNfo: number;
+};
+
+export const testJellyfinConnection = () =>
+  requestJsonWithBodyError<JellyfinTestResult>(
+    `${getBackendUrl()}/api/jellyfin/test`,
+    { method: "POST" }
+  );
+
+export const fetchJellyfinLibraries = () =>
+  requestJson<{ ok: boolean; libraries?: JellyfinLibrary[]; message?: string }>("/api/jellyfin/libraries");
+
+export const fetchJellyfinStatus = () =>
+  requestJson<JellyfinStatus>("/api/jellyfin/status");
+
+export const refreshJellyfinLibrary = (libraryId?: string) =>
+  requestJsonWithBodyError<{ ok: boolean; message: string }>(
+    `${getBackendUrl()}/api/jellyfin/refresh/library${libraryId ? `?id=${libraryId}` : ""}`,
+    { method: "POST" }
+  );
+
+export const refreshJellyfinAnime = (animeId: string) =>
+  requestJsonWithBodyError<{ ok: boolean; queued: boolean; animeId: string; message: string }>(
+    `${getBackendUrl()}/api/jellyfin/refresh/anime/${animeId}`,
+    { method: "POST" }
+  );
+
+export const rebuildJellyfinAnime = (animeId: string) =>
+  requestJsonWithBodyError<{ ok: boolean; nfo: { episodesNfo: number; errors: string[] }; refreshQueued: boolean }>(
+    `${getBackendUrl()}/api/jellyfin/rebuild/${animeId}`,
+    { method: "POST" }
+  );
+
+export const fetchJellyfinReadiness = () =>
+  requestJson<JellyfinReadiness>("/api/jellyfin/readiness");
+
+export const fetchJellyfinAnimeReadiness = (animeId: string) =>
+  requestJson<{ ok: boolean } & JellyfinAnimeReadiness>(`/api/jellyfin/readiness/${animeId}`);

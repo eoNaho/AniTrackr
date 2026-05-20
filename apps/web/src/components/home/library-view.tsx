@@ -2,7 +2,12 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import type { DownloadJob, BackendProvider } from "@/lib/api";
-import { generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan, batchLibraryAction, fetchSearchProviders } from "@/lib/api";
+import {
+  generateAllJellyfinNfo, generateJellyfinNfo, enrichAnimeAnilist, enrichAnimeJikan,
+  batchLibraryAction, fetchSearchProviders,
+  refreshJellyfinAnime, rebuildJellyfinAnime, fetchJellyfinAnimeReadiness,
+  type JellyfinAnimeReadiness,
+} from "@/lib/api";
 import { Panel, Badge, StatBox, AnimeRow, AnimeView, ActionBtn, ConfirmDialog, generateBar, statusBadgeClass, statusColor } from "./ui";
 import { EpisodeList } from "./episode-list";
 import { AnimeRulesPanel } from "./anime-rules-panel";
@@ -80,6 +85,9 @@ export function LibraryView({
   const [metaStatus, setMetaStatus] = useState<string | null>(null);
   const [isRunningNfo, setIsRunningNfo] = useState(false);
   const [isRunningMeta, setIsRunningMeta] = useState(false);
+  const [jellyfinStatus, setJellyfinStatus] = useState<string | null>(null);
+  const [isRunningJellyfin, setIsRunningJellyfin] = useState(false);
+  const [jellyfinReadiness, setJellyfinReadiness] = useState<JellyfinAnimeReadiness | null>(null);
   const [queueConfirmAction, setQueueConfirmAction] = useState<"cancel-all" | "clear-monitor" | null>(null);
   const [queueConfirmBusy, setQueueConfirmBusy] = useState(false);
 
@@ -150,6 +158,15 @@ export function LibraryView({
   };
 
   const selected = animes[selectedIndex < animes.length ? selectedIndex : 0] ?? null;
+
+  // Carrega readiness Jellyfin ao selecionar um anime
+  useEffect(() => {
+    if (!selected?.id) { setJellyfinReadiness(null); return; }
+    fetchJellyfinAnimeReadiness(selected.id)
+      .then((r) => setJellyfinReadiness(r.ok ? r : null))
+      .catch(() => setJellyfinReadiness(null));
+  }, [selected?.id]);
+
   const progress = selected
     ? Math.min(100, Math.max(0, Math.round((selected.downloaded / Math.max(1, selected.total)) * 100)))
     : 0;
@@ -184,6 +201,38 @@ export function LibraryView({
       setNfoStatus(`erro: ${(err as Error).message}`);
     } finally {
       setIsRunningNfo(false);
+    }
+  }
+
+  async function handleJellyfinRefreshSelected() {
+    if (!selected) return;
+    setIsRunningJellyfin(true);
+    setJellyfinStatus(`sincronizando ${selected.title}...`);
+    try {
+      const res = await refreshJellyfinAnime(selected.id);
+      setJellyfinStatus(res.ok ? `✓ refresh enviado` : `✕ ${res.message}`);
+    } catch (err) {
+      setJellyfinStatus(`erro: ${(err as Error).message}`);
+    } finally {
+      setIsRunningJellyfin(false);
+    }
+  }
+
+  async function handleJellyfinRebuildSelected() {
+    if (!selected) return;
+    setIsRunningJellyfin(true);
+    setJellyfinStatus(`regenerando NFO + sync ${selected.title}...`);
+    try {
+      const res = await rebuildJellyfinAnime(selected.id);
+      const nfoText = `${res.nfo.episodesNfo} ep.nfo`;
+      const suffix = res.nfo.errors.length > 0 ? ` · ${res.nfo.errors.length} aviso(s)` : "";
+      setJellyfinStatus(`✓ ${nfoText}${suffix}${res.refreshQueued ? " · refresh enfileirado" : ""}`);
+      const r = await fetchJellyfinAnimeReadiness(selected.id).catch(() => null);
+      if (r?.ok) setJellyfinReadiness(r);
+    } catch (err) {
+      setJellyfinStatus(`erro: ${(err as Error).message}`);
+    } finally {
+      setIsRunningJellyfin(false);
     }
   }
 
@@ -489,6 +538,27 @@ export function LibraryView({
 
               <div className="border border-dashed border-[#45475a] bg-black/20 p-3">
                 <div className="mb-2 text-[12px] font-bold text-[#89dceb]">-- JELLYFIN / METADATA --</div>
+
+                {/* Indicadores de prontidão Jellyfin */}
+                {jellyfinReadiness && (
+                  <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono">
+                    <span className={jellyfinReadiness.hasTvshowNfo ? "text-[#a6e3a1]" : "text-[#f38ba8]"}>
+                      {jellyfinReadiness.hasTvshowNfo ? "● tvshow.nfo" : "○ tvshow.nfo"}
+                    </span>
+                    <span className={jellyfinReadiness.episodesMissingNfo === 0 ? "text-[#a6e3a1]" : "text-[#f9e2af]"}>
+                      {jellyfinReadiness.episodesMissingNfo === 0
+                        ? "● ep.nfo ok"
+                        : `○ ep.nfo (${jellyfinReadiness.episodesMissingNfo} faltando)`}
+                    </span>
+                    <span className={jellyfinReadiness.hasPoster ? "text-[#a6e3a1]" : "text-[#6c7086]"}>
+                      {jellyfinReadiness.hasPoster ? "● poster" : "○ poster"}
+                    </span>
+                    <span className={jellyfinReadiness.hasFanart ? "text-[#a6e3a1]" : "text-[#6c7086]"}>
+                      {jellyfinReadiness.hasFanart ? "● fanart" : "○ fanart"}
+                    </span>
+                  </div>
+                )}
+
                 <div className="grid gap-2 md:grid-cols-2">
                   <ActionBtn
                     kbd="n"
@@ -514,11 +584,24 @@ export function LibraryView({
                     onClick={() => void handleEnrichSelectedAniList()}
                     disabled={isBusy || isRunningMeta}
                   />
+                  <ActionBtn
+                    kbd="y"
+                    label="Sync Jellyfin (série)"
+                    onClick={() => void handleJellyfinRefreshSelected()}
+                    disabled={isBusy || isRunningJellyfin}
+                  />
+                  <ActionBtn
+                    kbd="Y"
+                    label="Regerar NFO + sync"
+                    onClick={() => void handleJellyfinRebuildSelected()}
+                    disabled={isBusy || isRunningJellyfin}
+                  />
                 </div>
-                {(nfoStatus || metaStatus) && (
+                {(nfoStatus || metaStatus || jellyfinStatus) && (
                   <div className="mt-2 border border-[#45475a] bg-black/20 px-2 py-1 text-[11px] text-[#bac2de]">
                     {nfoStatus && <div>{nfoStatus}</div>}
                     {metaStatus && <div>{metaStatus}</div>}
+                    {jellyfinStatus && <div className={jellyfinStatus.startsWith("✓") ? "text-[#a6e3a1]" : jellyfinStatus.startsWith("✕") ? "text-[#f38ba8]" : ""}>{jellyfinStatus}</div>}
                   </div>
                 )}
               </div>

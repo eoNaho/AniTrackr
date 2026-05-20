@@ -1,6 +1,7 @@
 import Elysia from "elysia";
 import { getAllHealth } from "../services/circuit-breaker.ts";
 import { qbtIsEnabled, qbtConnect } from "../services/qbittorrent.ts";
+import { getStatus as getJellyfinStatus } from "../services/jellyfin-connector.ts";
 import db from "../db/index.ts";
 import { existsSync } from "fs";
 
@@ -44,6 +45,7 @@ export const diagnosticsRoutes = new Elysia({ prefix: "/diagnostics" })
 
     const qbtEnabled = await qbtIsEnabled();
     const qbtStatus = qbtEnabled ? await qbtConnect().catch(() => null) : null;
+    const jellyfinStatus = getJellyfinStatus();
 
     const downloadPath = getConfig("download_path");
     const downloadPathValid = downloadPath ? existsSync(downloadPath) : false;
@@ -71,6 +73,15 @@ export const diagnosticsRoutes = new Elysia({ prefix: "/diagnostics" })
         ffmpegAvailable,
         realDownloadsReady,
       },
+      jellyfin: {
+        enabled: jellyfinStatus.enabled,
+        configured: jellyfinStatus.configured,
+        autoRefresh: jellyfinStatus.autoRefresh,
+        pendingRefreshes: jellyfinStatus.pendingRefreshes,
+        lastError: jellyfinStatus.lastError,
+        lastTestAt: jellyfinStatus.lastTestAt,
+        lastRefreshAt: jellyfinStatus.lastRefreshAt,
+      },
       summary: {
         providersDown: openProviders.length,
         recentFailures: recentFailures.length,
@@ -79,7 +90,8 @@ export const diagnosticsRoutes = new Elysia({ prefix: "/diagnostics" })
           !downloadPathValid ||
           !ytDlpAvailable ||
           !ffmpegAvailable ||
-          (qbtEnabled && qbtStatus?.ok !== true),
+          (qbtEnabled && qbtStatus?.ok !== true) ||
+          (jellyfinStatus.enabled && !jellyfinStatus.configured),
       },
     };
   });

@@ -25,6 +25,7 @@ import { logger } from "./utils/logger.ts";
 import { DB_FILE, DATA_ROOT } from "./db/index.ts";
 import { runBackupIfDue } from "./services/backup.ts";
 import { startAutoScheduler, getAutoScheduleStatus, triggerAutoScheduleNow } from "./services/auto-schedule.ts";
+import { startRefreshQueue } from "./services/jellyfin-refresh-queue.ts";
 import db from "./db/index.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3001");
@@ -145,6 +146,9 @@ runBackupIfDue();
 
 // Agendamento automático de séries em lançamento
 startAutoScheduler();
+
+// Fila de refresh Jellyfin
+startRefreshQueue();
 
 logger.info("app", `╔══════════════════════════════════════════════════╗`);
 logger.info("app", `║  AniTrackr Backend v2.1.0                  ║`);

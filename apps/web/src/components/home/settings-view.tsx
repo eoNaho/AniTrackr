@@ -35,6 +35,7 @@ import {
   type UpdateCheckResult,
 } from "@/lib/api";
 import { Panel } from "./ui";
+import { JellyfinPanel } from "./jellyfin-panel";
 
 // ── Input Components ──────────────────────────────────────────────────────────
 
@@ -410,6 +411,14 @@ const DEFAULTS: ConfigState = {
   webhook_type: "discord",
   // Disco
   disk_alert_threshold_gb: "2",
+  // Jellyfin
+  jellyfin_enabled: "false",
+  jellyfin_base_url: "",
+  jellyfin_api_key: "",
+  jellyfin_library_id: "",
+  jellyfin_auto_refresh: "false",
+  jellyfin_refresh_mode: "series",
+  jellyfin_request_timeout_ms: "10000",
 };
 
 // ── API Keys ──────────────────────────────────────────────────────────────────
@@ -1200,6 +1209,9 @@ export function SettingsView({ onSaved }: SettingsViewProps) {
 
           {/* API Keys */}
           <ApiKeysPanel />
+
+          {/* Jellyfin */}
+          <JellyfinPanel />
 
           {/* Download */}
           <Panel title="[DOWNLOAD]">

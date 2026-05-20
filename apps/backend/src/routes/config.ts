@@ -4,7 +4,7 @@ import { logger } from "../utils/logger.ts";
 
 type ConfigRow = { key: string; value: string };
 
-const SENSITIVE_KEYS = new Set(["qbittorrent_password", "opensubtitles_password"]);
+const SENSITIVE_KEYS = new Set(["qbittorrent_password", "opensubtitles_password", "jellyfin_api_key"]);
 const MASK = "***";
 
 const ALLOWED_KEYS = new Set([
@@ -27,6 +27,10 @@ const ALLOWED_KEYS = new Set([
   "webhook_enabled", "webhook_url", "webhook_type",
   // Alertas de disco
   "disk_alert_threshold_gb",
+  // Jellyfin connector
+  "jellyfin_enabled", "jellyfin_base_url", "jellyfin_api_key",
+  "jellyfin_library_id", "jellyfin_auto_refresh", "jellyfin_refresh_mode",
+  "jellyfin_request_timeout_ms",
 ]);
 
 function maskValue(key: string, value: string): string {
@@ -70,7 +74,14 @@ export const configRoutes = new Elysia({ prefix: "/config" })
         // Não sobrescrever senha mascarada
         if (SENSITIVE_KEYS.has(key) && value === MASK) continue;
 
-        // Validar qbittorrent_host como URL http/https
+        // Validar URLs http/https
+        if (key === "jellyfin_base_url" && value) {
+          try {
+            const u = new URL(value);
+            if (!["http:", "https:"].includes(u.protocol)) { skipped.push(key); continue; }
+          } catch { skipped.push(key); continue; }
+        }
+
         if (key === "qbittorrent_host") {
           try {
             const u = new URL(value);
@@ -105,13 +116,15 @@ export const configRoutes = new Elysia({ prefix: "/config" })
       if (SENSITIVE_KEYS.has(params.key) && body.value === MASK)
         return { ok: true, key: params.key, skipped: true };
 
-      if (params.key === "qbittorrent_host") {
-        try {
-          const u = new URL(body.value);
-          if (!["http:", "https:"].includes(u.protocol))
-            return new Response(JSON.stringify({ error: "URL deve usar http ou https" }), { status: 422 });
-        } catch {
-          return new Response(JSON.stringify({ error: "URL inválida" }), { status: 422 });
+      for (const urlKey of ["qbittorrent_host", "jellyfin_base_url"]) {
+        if (params.key === urlKey && body.value) {
+          try {
+            const u = new URL(body.value);
+            if (!["http:", "https:"].includes(u.protocol))
+              return new Response(JSON.stringify({ error: "URL deve usar http ou https" }), { status: 422 });
+          } catch {
+            return new Response(JSON.stringify({ error: "URL inválida" }), { status: 422 });
+          }
         }
       }
 

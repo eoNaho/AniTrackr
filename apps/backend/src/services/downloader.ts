@@ -10,6 +10,7 @@ import { animeDriveSearch, animeDriveEpisodes, animeDriveStreamUrl } from "./ani
 import { dattebayoSearch, dattebayoEpisodes, dattebayoStreamUrl } from "./dattebayo.ts";
 import { resolveDownloadSourceUrl } from "./source-resolver.ts";
 import { generateSingleEpisodeNfoAsync } from "./jellyfin.ts";
+import { scheduleJellyfinRefresh } from "./jellyfin-refresh-queue.ts";
 import { getAniListAnime, resolveSeriesRootTitle } from "./anilist.ts";
 import { notifyDownloadComplete, notifyDownloadFailed } from "./notifications.ts";
 import { hasOpenSubtitlesKey, fetchAndSaveSubtitle } from "./opensubtitles.ts";
@@ -963,6 +964,8 @@ function completeJob(jobId: string, animeId: string, episode: number, season: nu
 
   // Gera NFO Jellyfin de forma assíncrona (não bloqueia)
   void generateSingleEpisodeNfoAsync(animeId, episode, season, filePath);
+  // Enfileira refresh do Jellyfin se auto refresh estiver habilitado
+  scheduleJellyfinRefresh(animeId, filePath);
 
   // Notificação webhook
   const jobRow = db.query<{ provider: string; anime_id: string }, [string]>(

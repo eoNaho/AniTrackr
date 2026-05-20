@@ -234,6 +234,23 @@ db.run(`
 db.run(`CREATE INDEX IF NOT EXISTS idx_apikeys_hash ON api_keys(key_hash)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_audit_key ON api_audit_log(api_key_id, created_at)`);
 
+// ── pending_jellyfin_refreshes ─────────────────────────────────────────────
+db.run(`
+  CREATE TABLE IF NOT EXISTS pending_jellyfin_refreshes (
+    id            TEXT PRIMARY KEY,
+    anime_id      TEXT NOT NULL,
+    series_path   TEXT NOT NULL DEFAULT '',
+    refresh_type  TEXT DEFAULT 'series',
+    status        TEXT DEFAULT 'pending',
+    attempt_count INTEGER DEFAULT 0,
+    last_error    TEXT,
+    next_retry_at TEXT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    updated_at    TEXT DEFAULT (datetime('now'))
+  )
+`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_jellyfin_refresh_status ON pending_jellyfin_refreshes(status, next_retry_at)`);
+
 // ── config ─────────────────────────────────────────────────────────────────
 db.run(`
   CREATE TABLE IF NOT EXISTS config (
@@ -287,6 +304,14 @@ const defaultConfig: Record<string, string> = {
   nyaa_preferred_group:      "SubsPlease",
   nyaa_preferred_resolution: "1080p",
   nyaa_default_category:     "1_2",
+  // Jellyfin connector
+  jellyfin_enabled:             "false",
+  jellyfin_base_url:            "",
+  jellyfin_api_key:             "",
+  jellyfin_library_id:          "",
+  jellyfin_auto_refresh:        "false",
+  jellyfin_refresh_mode:        "series",
+  jellyfin_request_timeout_ms:  "10000",
 };
 
 const insertCfg = db.prepare(`INSERT OR IGNORE INTO config (key, value) VALUES ($k, $v)`);
