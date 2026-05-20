@@ -13,6 +13,7 @@ export const ALL_SCOPES = [
   "downloads:read",
   "queue:write",
   "config:read",
+  "config:write",
   "admin",
 ] as const;
 

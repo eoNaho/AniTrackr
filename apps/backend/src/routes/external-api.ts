@@ -237,12 +237,14 @@ export const externalApiRoutes = new Elysia({ prefix: "/v1" })
     // Idempotência: se Idempotency-Key for enviada, verifica downloads recentes (últimos 60s)
     const idempKey = headers["idempotency-key"] as string | undefined;
     if (idempKey) {
-      const recent = db.query<{ id: string }, [string, string]>(
-        `SELECT d.id FROM downloads d
-         WHERE d.anime_id = ? AND d.enqueued_at > datetime('now', '-60 seconds')
-           AND d.episode_number IN (${episodes.map(() => "?").join(",")})
+      const placeholders = episodes.map(() => "?").join(",");
+      const stmt = db.prepare(
+        `SELECT id FROM downloads
+         WHERE anime_id = ? AND enqueued_at > datetime('now', '-60 seconds')
+           AND episode_number IN (${placeholders})
          LIMIT 1`
-      ).get(animeId, ...episodes);
+      );
+      const recent = stmt.get(animeId, ...episodes) as { id: string } | null;
       if (recent) {
         return { ok: true, message: "idempotent — already queued recently", queued: 0, jobs: [] };
       }
