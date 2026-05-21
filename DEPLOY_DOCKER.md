@@ -84,12 +84,12 @@ bun run docker:up:image
 Tags:
 
 - `latest` na branch `main`
-- `v*` quando publicar tag (ex: `v2.1.0`)
+- `v*` quando publicar tag (ex: `v2.1.1`)
 
 Para usar tag especifica:
 
 ```bash
-ANITRACKR_IMAGE_TAG=v2.1.0 docker compose -f docker-compose.images.yml up -d
+ANITRACKR_IMAGE_TAG=v2.1.1 docker compose -f docker-compose.images.yml up -d
 ```
 
 Para usar outro owner (fork):
