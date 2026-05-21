@@ -450,6 +450,19 @@ export const metadataRoutes = new Elysia({ prefix: "/metadata" })
 
     const id = randomUUID();
     const titleValue = asString(title, "").trim() || "Untitled";
+
+    // B19: ON CONFLICT sem coluna-alvo nunca dispara (PK é UUID novo). Verificar duplicata antes.
+    const kitsuIdStr = asNullableString(kitsuId);
+    if (kitsuIdStr != null) {
+      const dup = db.query<{ id: string }, [string]>(
+        `SELECT id FROM animes WHERE kitsu_id = ? LIMIT 1`
+      ).get(kitsuIdStr);
+      if (dup) {
+        logger.info("metadata", `duplicate save "${titleValue}" (kitsu_id=${kitsuIdStr}) — retornando id existente`);
+        return { ok: true, id: dup.id, existed: true };
+      }
+    }
+
     const values: SQLQueryBindings[] = [
       id,
       asNullableString(kitsuId),

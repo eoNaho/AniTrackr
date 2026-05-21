@@ -30,6 +30,12 @@ import db from "./db/index.ts";
 
 const PORT = parseInt(process.env.PORT ?? "3001");
 
+// Recupera jobs órfãos de crashes anteriores — timers in-memory foram perdidos
+db.run(
+  `UPDATE downloads SET status = 'queued', progress = 0, speed_kbps = 0, next_retry_at = NULL
+   WHERE status IN ('downloading', 'retry_wait')`
+);
+
 const app = new Elysia()
   .use(cors({
     origin: ["http://localhost:3000", "http://127.0.0.1:3000"],

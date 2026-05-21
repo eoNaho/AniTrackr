@@ -73,7 +73,7 @@ type GuardResult =
 
 export function authGuard(
   request: Request,
-  set: { status: number },
+  set: { status?: number | string },
   requiredScope?: string
 ): GuardResult {
   const result = resolveApiKey(request);

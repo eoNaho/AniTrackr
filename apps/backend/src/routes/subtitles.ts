@@ -48,12 +48,12 @@ export const subtitleRoutes = new Elysia({ prefix: "/subtitles" })
 
   // POST /api/subtitles/download — baixa legenda por fileId para um episódio específico
   .post("/download", async ({ body }) => {
-    const { fileId, animeId, episodeNumber, language } = body;
+    const { fileId, animeId, episodeNumber, season, language } = body;
 
-    // Busca o path do episódio no banco
-    const ep = db.query<{ file_path: string | null }, [string, number]>(
-      `SELECT file_path FROM episodes WHERE anime_id = ? AND number = ?`
-    ).get(animeId, episodeNumber);
+    // I85: Filtrar por season para evitar colar legenda no episódio errado em multi-temporada
+    const ep = db.query<{ file_path: string | null }, [string, number, number]>(
+      `SELECT file_path FROM episodes WHERE anime_id = ? AND number = ? AND season = ?`
+    ).get(animeId, episodeNumber, season ?? 1);
 
     if (!ep?.file_path) {
       return { error: "Episódio não encontrado ou sem arquivo local" };
@@ -72,21 +72,23 @@ export const subtitleRoutes = new Elysia({ prefix: "/subtitles" })
       fileId: t.Number(),
       animeId: t.String(),
       episodeNumber: t.Number(),
+      season: t.Optional(t.Number()),
       language: t.Optional(t.String()),
     }),
   })
 
   // POST /api/subtitles/auto — busca e baixa automaticamente para um episódio
   .post("/auto", async ({ body }) => {
-    const { animeId, episodeNumber, languages } = body;
+    const { animeId, episodeNumber, languages, season: seasonParam } = body;
 
     const anime = db.query<{ title: string; title_english: string | null }, [string]>(
       `SELECT title, title_english FROM animes WHERE id = ?`
     ).get(animeId);
 
-    const ep = db.query<{ file_path: string | null; season: number }, [string, number]>(
-      `SELECT file_path, season FROM episodes WHERE anime_id = ? AND number = ?`
-    ).get(animeId, episodeNumber);
+    // I85: Filtrar por season — sem isso, multi-temporada pega o primeiro episódio encontrado (geralmente S1)
+    const ep = db.query<{ file_path: string | null; season: number }, [string, number, number]>(
+      `SELECT file_path, season FROM episodes WHERE anime_id = ? AND number = ? AND season = ?`
+    ).get(animeId, episodeNumber, seasonParam ?? 1);
 
     if (!anime || !ep?.file_path) {
       return { error: "Anime/episódio não encontrado ou sem arquivo local" };
@@ -109,6 +111,7 @@ export const subtitleRoutes = new Elysia({ prefix: "/subtitles" })
     body: t.Object({
       animeId: t.String(),
       episodeNumber: t.Number(),
+      season: t.Optional(t.Number()),
       languages: t.Optional(t.Array(t.String())),
     }),
   })
@@ -130,7 +133,14 @@ export const subtitleRoutes = new Elysia({ prefix: "/subtitles" })
 
     const missing = episodes.filter((ep) => {
       const base = ep.file_path.replace(/\.[^.]+$/, "");
-      return !existsSync(`${base}.srt`) && !existsSync(`${base}.pt.srt`) && !existsSync(`${base}.pt-BR.srt`);
+      // I62: Inclui ".pt_BR.srt" (formato antigo) além do padrão Jellyfin ".pt-BR.srt"
+      return (
+        !existsSync(`${base}.srt`) &&
+        !existsSync(`${base}.pt.srt`) &&
+        !existsSync(`${base}.pt-BR.srt`) &&
+        !existsSync(`${base}.pt_BR.srt`) &&
+        !existsSync(`${base}.en.srt`)
+      );
     });
 
     return { missing, total: missing.length };

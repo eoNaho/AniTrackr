@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchJellyfinStatus,
   fetchJellyfinLibraries,
@@ -109,6 +109,10 @@ export function JellyfinPanel({ className }: { className?: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // F11: ref para limpar o timer do "Salvo!" no unmount
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); }, []);
+
   const loadAll = useCallback(async () => {
     try {
       const [configData, statusData, readinessData] = await Promise.all([
@@ -133,11 +137,13 @@ export function JellyfinPanel({ className }: { className?: string }) {
     }
   }, []);
 
-  useEffect(() => { void loadAll(); }, [loadAll]);
+  useEffect(() => { setTimeout(() => void loadAll(), 0); }, [loadAll]);
 
   function set(key: string, value: string) {
     setCfg((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
+    // F26: trocar a URL invalida as bibliotecas carregadas do servidor anterior
+    if (key === "jellyfin_base_url") setLibraries([]);
   }
 
   async function handleSave() {
@@ -146,7 +152,8 @@ export function JellyfinPanel({ className }: { className?: string }) {
     try {
       await saveConfig(cfg);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
       const statusData = await fetchJellyfinStatus().catch(() => null);
       if (statusData) setStatus(statusData);
     } catch (e) {
@@ -161,12 +168,18 @@ export function JellyfinPanel({ className }: { className?: string }) {
     setTestResult(null);
     setError(null);
     try {
-      await saveConfig({
+      const apiKeyPayload = cfg.jellyfin_api_key === MASK ? undefined : cfg.jellyfin_api_key;
+      const saveRes = await saveConfig({
         jellyfin_enabled: cfg.jellyfin_enabled,
         jellyfin_base_url: cfg.jellyfin_base_url,
-        jellyfin_api_key: cfg.jellyfin_api_key === MASK ? undefined : cfg.jellyfin_api_key,
+        ...(apiKeyPayload !== undefined ? { jellyfin_api_key: apiKeyPayload } : {}),
         jellyfin_request_timeout_ms: cfg.jellyfin_request_timeout_ms,
       } as Record<string, string>);
+      // F12: Se enviamos uma API key nova mas não foi salva, avisar em vez de testar com chave antiga
+      if (apiKeyPayload && !saveRes.updated?.includes("jellyfin_api_key")) {
+        setError("A API Key não pôde ser salva antes do teste (verifique se o valor é válido). Tente salvar manualmente primeiro.");
+        return;
+      }
       const result = await testJellyfinConnection();
       setTestResult(result);
       const statusData = await fetchJellyfinStatus().catch(() => null);

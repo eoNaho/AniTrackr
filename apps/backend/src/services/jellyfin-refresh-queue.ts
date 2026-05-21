@@ -43,15 +43,20 @@ async function processOne(row: PendingRefresh): Promise<void> {
     [row.id]
   );
 
-  const result = row.refresh_type === "series" && row.series_path
+  const rawResult = row.refresh_type === "series" && row.series_path
     ? await refreshSeries(row.series_path)
     : await refreshLibrary();
+  const result = { matched: true, ...rawResult };
 
   if (result.ok) {
     db.run(
       `UPDATE pending_jellyfin_refreshes SET status = 'done', updated_at = datetime('now') WHERE id = ?`,
       [row.id]
     );
+    consecutiveFailures = 0;
+    if (!result.matched) {
+      logger.warn("jellyfin_refresh", `Série não encontrada no Jellyfin — refresh completo da biblioteca usado para anime ${row.anime_id}`);
+    }
     logger.info("jellyfin_refresh", `Refresh concluído para anime ${row.anime_id}`);
   } else {
     const attempts = row.attempt_count + 1;
@@ -78,6 +83,13 @@ async function processOne(row: PendingRefresh): Promise<void> {
 }
 
 export async function processRefreshQueue(): Promise<void> {
+  // I47: Circuit breaker — pausa a fila quando Jellyfin está inacessível
+  if (Date.now() < circuitOpenUntil) {
+    const remaining = Math.ceil((circuitOpenUntil - Date.now()) / 1000);
+    logger.warn("jellyfin_refresh", `Circuit breaker ativo — aguardando ${remaining}s antes do próximo refresh`);
+    return;
+  }
+
   const now = new Date().toISOString();
   const rows = db.query<PendingRefresh, [string]>(
     `SELECT * FROM pending_jellyfin_refreshes
@@ -85,11 +97,23 @@ export async function processRefreshQueue(): Promise<void> {
      ORDER BY created_at ASC LIMIT 5`
   ).all(now);
 
+  let batchFailures = 0;
   for (const row of rows) {
     try {
       await processOne(row);
+      consecutiveFailures = 0;
     } catch (err) {
       logger.error("jellyfin_refresh", `processOne error for ${row.id}: ${err}`);
+      consecutiveFailures++;
+      batchFailures++;
+    }
+  }
+
+  if (batchFailures > 0) {
+    consecutiveFailures += batchFailures;
+    if (consecutiveFailures >= CIRCUIT_BREAK_THRESHOLD) {
+      circuitOpenUntil = Date.now() + 5 * 60 * 1000; // 5 minutos
+      logger.warn("jellyfin_refresh", `Circuit breaker aberto após ${consecutiveFailures} falhas — pausando 5 minutos`);
     }
   }
 }
@@ -111,10 +135,24 @@ export function scheduleJellyfinRefresh(animeId: string, filePath: string): void
   enqueueRefresh(animeId, serPath, "series");
 }
 
+// Circuit breaker — evita saturar o servidor Jellyfin quando está offline
+let consecutiveFailures = 0;
+const CIRCUIT_BREAK_THRESHOLD = 5;
+let circuitOpenUntil = 0;
+
 let _interval: ReturnType<typeof setInterval> | null = null;
 
 export function startRefreshQueue(): void {
   if (_interval) return;
-  _interval = setInterval(() => void processRefreshQueue(), 30_000);
+  _interval = setInterval(() => {
+    // I48: Reaper — reset jobs presos em 'processing' há mais de 10 minutos
+    db.run(
+      `UPDATE pending_jellyfin_refreshes
+       SET status = 'pending', updated_at = datetime('now')
+       WHERE status = 'processing'
+         AND updated_at < datetime('now', '-10 minutes')`
+    );
+    void processRefreshQueue();
+  }, 30_000);
   logger.info("jellyfin_refresh", "Fila de refresh Jellyfin iniciada (intervalo 30s)");
 }

@@ -161,10 +161,15 @@ export function LibraryView({
 
   // Carrega readiness Jellyfin ao selecionar um anime
   useEffect(() => {
-    if (!selected?.id) { setJellyfinReadiness(null); return; }
+    let active = true;
+    if (!selected?.id) {
+      queueMicrotask(() => { if (active) setJellyfinReadiness(null); });
+      return () => { active = false; };
+    }
     fetchJellyfinAnimeReadiness(selected.id)
-      .then((r) => setJellyfinReadiness(r.ok ? r : null))
-      .catch(() => setJellyfinReadiness(null));
+      .then((r) => { if (active) setJellyfinReadiness(r.ok ? r : null); })
+      .catch(() => { if (active) setJellyfinReadiness(null); });
+    return () => { active = false; };
   }, [selected?.id]);
 
   const progress = selected

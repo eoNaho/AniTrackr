@@ -4,6 +4,7 @@
  */
 
 import Elysia, { t } from "elysia";
+import { cors } from "@elysiajs/cors";
 import { authGuard, logAudit, ALL_SCOPES } from "../middleware/api-auth.ts";
 import { searchAllProviders, getEpisodesWithFallback, getProviderInfo, type Provider } from "../services/provider-chain.ts";
 import { enqueueDownloads, getAllDownloads } from "../services/downloader.ts";
@@ -24,6 +25,11 @@ function fail(error: string, message: string) {
 // ── routes ────────────────────────────────────────────────────────────────────
 
 export const externalApiRoutes = new Elysia({ prefix: "/v1" })
+  .use(cors({
+    origin: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "Idempotency-Key"],
+  }))
 
   // ── GET /api/v1/health — público, sem auth ──────────────────────────────────
   .get("/health", () =>
@@ -83,8 +89,11 @@ export const externalApiRoutes = new Elysia({ prefix: "/v1" })
       return fail("validation_error", "animeId is required");
     }
 
-    const anime = db.query<{ id: string; title: string; title_english: string | null; source_url: string | null }, [string]>(
-      `SELECT id, title, title_english, source_url FROM animes WHERE id = ?`
+    const anime = db.query<{
+      id: string; title: string; title_english: string | null;
+      source_url: string | null; provider: string | null; allanime_id: string | null;
+    }, [string]>(
+      `SELECT id, title, title_english, source_url, provider, allanime_id FROM animes WHERE id = ?`
     ).get(animeId);
 
     if (!anime) {
@@ -95,8 +104,11 @@ export const externalApiRoutes = new Elysia({ prefix: "/v1" })
     const season = Math.max(1, parseInt(query.season ?? "1", 10) || 1);
     const t0 = performance.now();
     try {
-      const searchTitle = anime.title_english ?? anime.title;
-      const episodes = await getEpisodesWithFallback(searchTitle, season, anime.source_url ?? undefined);
+      const episodes = await getEpisodesWithFallback(
+        anime.source_url ?? (anime.title_english ?? anime.title),
+        (anime.provider as Provider) || "animefire",
+        anime.allanime_id ?? undefined
+      );
       logAudit(ctx!.keyId, "/api/v1/search/episodes", "GET", 200, performance.now() - t0);
       return ok({ animeId, title: anime.title, season, episodes, total: episodes.length });
     } catch (e) {
@@ -225,8 +237,8 @@ export const externalApiRoutes = new Elysia({ prefix: "/v1" })
       return fail("validation_error", "episodes must be a non-empty array with at most 100 items");
     }
 
-    const anime = db.query<{ id: string; title: string }, [string]>(
-      `SELECT id, title FROM animes WHERE id = ?`
+    const anime = db.query<{ id: string; title: string; provider: string | null }, [string]>(
+      `SELECT id, title, provider FROM animes WHERE id = ?`
     ).get(animeId);
 
     if (!anime) {
@@ -251,7 +263,7 @@ export const externalApiRoutes = new Elysia({ prefix: "/v1" })
     }
 
     const t0 = performance.now();
-    const jobs = enqueueDownloads(animeId, episodes, season ?? 1, sourceUrl);
+    const jobs = enqueueDownloads(animeId, episodes, season ?? 1, sourceUrl, anime.provider ?? undefined);
     logAudit(ctx!.keyId, "/api/v1/queue", "POST", 200, performance.now() - t0);
     logger.info("external-api", `queued ${jobs.length} eps for "${anime.title}" via key ${ctx!.keyId}`);
 

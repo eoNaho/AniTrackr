@@ -717,7 +717,7 @@ export const libraryRoutes = new Elysia({ prefix: "/library" })
       for (const animeId of animeIds) {
         try {
           const res = await scanAnime(animeId);
-          results.push({ animeId, ok: true, detail: `${res.foundFiles} arquivo(s)` });
+          results.push({ animeId, ok: true, detail: `${res.filesFound} arquivo(s)` });
         } catch (e) { results.push({ animeId, ok: false, detail: String(e) }); }
       }
     } else {

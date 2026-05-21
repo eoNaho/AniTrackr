@@ -1,10 +1,10 @@
 import Elysia, { t } from "elysia";
-import { generateNfo, generateNfoAll, downloadPosters } from "../services/jellyfin.ts";
+import { generateNfo, generateNfoAll, downloadPosters, resolveSeriesRootPath } from "../services/jellyfin.ts";
 import { testConnection, getLibraries, refreshLibrary, refreshSeries, getStatus } from "../services/jellyfin-connector.ts";
 import { enqueueRefresh } from "../services/jellyfin-refresh-queue.ts";
 import { logger } from "../utils/logger.ts";
 import db from "../db/index.ts";
-import { existsSync, readdirSync, statSync } from "fs";
+import { existsSync, readdirSync, statSync, readFileSync } from "fs";
 import { join } from "path";
 
 function jsonError(message: string, status = 500) {
@@ -30,16 +30,32 @@ type AnimeReadiness = {
   episodesMissingNfo: number;
 };
 
+function isValidNfo(nfoPath: string): boolean {
+  try {
+    const stat = statSync(nfoPath);
+    if (stat.size === 0) return false;
+    const content = readFileSync(nfoPath, "utf-8");
+    return content.includes("<tvshow>") || content.includes("<episodedetails>");
+  } catch {
+    return false;
+  }
+}
+
 function checkAnimeReadiness(animeId: string): AnimeReadiness | null {
   const anime = db.query<{
-    id: string; title: string; title_english: string | null; local_path: string;
-  }, [string]>(`SELECT id, title, title_english, local_path FROM animes WHERE id = ?`).get(animeId);
+    id: string; title: string; title_english: string | null; title_romaji: string | null;
+    local_path: string; year: number | null; series_title: string | null;
+  }, [string]>(
+    `SELECT id, title, title_english, title_romaji, local_path, year, series_title FROM animes WHERE id = ?`
+  ).get(animeId);
   if (!anime) return null;
 
-  const serPath = anime.local_path || "";
-  const hasTvshowNfo = !!serPath && existsSync(join(serPath, "tvshow.nfo"));
-  const hasPoster = !!serPath && existsSync(join(serPath, "poster.jpg"));
-  const hasFanart = !!serPath && existsSync(join(serPath, "fanart.jpg"));
+  // Usa o mesmo resolveSeriesRootPath que generateNfo usa — garante consistência de path
+  const serPath = resolveSeriesRootPath(anime);
+  const nfoPath = join(serPath, "tvshow.nfo");
+  const hasTvshowNfo = existsSync(nfoPath) && isValidNfo(nfoPath);
+  const hasPoster = existsSync(join(serPath, "poster.jpg"));
+  const hasFanart = existsSync(join(serPath, "fanart.jpg"));
 
   const episodes = db.query<{ file_path: string }, [string]>(
     `SELECT file_path FROM episodes WHERE anime_id = ? AND file_path IS NOT NULL AND file_path != ''`
@@ -54,7 +70,7 @@ function checkAnimeReadiness(animeId: string): AnimeReadiness | null {
   return {
     id: anime.id,
     title: anime.title_english ?? anime.title,
-    seriesPath: serPath,
+    seriesPath: serPath,        // path resolvido via resolveSeriesRootPath (mesmo do generateNfo)
     hasTvshowNfo,
     hasPoster,
     hasFanart,

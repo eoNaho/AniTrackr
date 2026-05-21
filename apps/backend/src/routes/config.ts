@@ -4,7 +4,9 @@ import { logger } from "../utils/logger.ts";
 
 type ConfigRow = { key: string; value: string };
 
-const SENSITIVE_KEYS = new Set(["qbittorrent_password", "opensubtitles_password", "jellyfin_api_key"]);
+const SENSITIVE_KEYS = new Set([
+  "qbittorrent_password", "opensubtitles_password", "jellyfin_api_key", "opensubtitles_api_key",
+]);
 const MASK = "***";
 
 const ALLOWED_KEYS = new Set([

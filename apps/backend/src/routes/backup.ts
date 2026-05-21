@@ -1,4 +1,5 @@
 import Elysia, { t } from "elysia";
+import type { SQLQueryBindings } from "bun:sqlite";
 import { readdirSync, statSync } from "fs";
 import { join } from "path";
 import db, { DATA_ROOT } from "../db/index.ts";
@@ -63,6 +64,10 @@ export const backupRoutes = new Elysia({ prefix: "/backup" })
       return new Response(JSON.stringify({ error: "JSON inválido: campo 'animes' ausente" }), { status: 400 });
     }
 
+    const toSqlBinding = (v: unknown): SQLQueryBindings =>
+      v === null || v === undefined ? null :
+      typeof v === "object" ? JSON.stringify(v) : v as SQLQueryBindings;
+
     // Restauração em transação para atomicidade
     db.transaction(() => {
       if (data.animes?.length) {
@@ -71,7 +76,7 @@ export const backupRoutes = new Elysia({ prefix: "/backup" })
         const placeholders = cols.map(() => "?").join(", ");
         const stmt = db.prepare(`INSERT OR IGNORE INTO animes (${cols.join(", ")}) VALUES (${placeholders})`);
         for (const row of data.animes) {
-          stmt.run(...cols.map((c) => row[c] ?? null));
+          stmt.run(...cols.map((c) => toSqlBinding(row[c])));
         }
       }
 
@@ -81,7 +86,7 @@ export const backupRoutes = new Elysia({ prefix: "/backup" })
         const placeholders = cols.map(() => "?").join(", ");
         const stmt = db.prepare(`INSERT OR IGNORE INTO episodes (${cols.join(", ")}) VALUES (${placeholders})`);
         for (const row of data.episodes) {
-          stmt.run(...cols.map((c) => row[c] ?? null));
+          stmt.run(...cols.map((c) => toSqlBinding(row[c])));
         }
       }
 
@@ -100,7 +105,7 @@ export const backupRoutes = new Elysia({ prefix: "/backup" })
         const placeholders = cols.map(() => "?").join(", ");
         const stmt = db.prepare(`INSERT OR IGNORE INTO anime_rules (${cols.join(", ")}) VALUES (${placeholders})`);
         for (const row of data.animeRules) {
-          stmt.run(...cols.map((c) => row[c] ?? null));
+          stmt.run(...cols.map((c) => toSqlBinding(row[c])));
         }
       }
     })();

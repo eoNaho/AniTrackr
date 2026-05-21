@@ -459,7 +459,7 @@ function ApiKeysPanel() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setTimeout(() => void load(), 0); }, [load]);
 
   function toggleScope(scope: string) {
     setSelectedScopes((prev) =>
@@ -486,15 +486,24 @@ function ApiKeysPanel() {
   }
 
   async function handleRevoke(id: string) {
-    await revokeApiKey(id).catch(() => {});
-    await load();
+    try {
+      await revokeApiKey(id);
+      await load();
+    } catch (e) {
+      setError(`Falha ao revogar chave: ${(e as Error).message}`);
+    }
   }
 
   async function handleAudit(id: string) {
     if (auditKeyId === id) { setAuditKeyId(null); return; }
     setAuditKeyId(id);
-    const res = await fetchApiKeyAudit(id).catch(() => ({ logs: [] }));
-    setAuditLogs(res.logs);
+    try {
+      const res = await fetchApiKeyAudit(id);
+      setAuditLogs(res.logs);
+    } catch {
+      setAuditLogs([]);
+      setError("Falha ao carregar auditoria — verifique a conexão com o backend");
+    }
   }
 
   function handleCopy() {

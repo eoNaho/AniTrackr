@@ -180,9 +180,23 @@ export async function downloadSubtitle(
     const res = await fetch(downloadLink, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const content = await res.text();
+    // I58: Detectar charset e decodificar corretamente (OpenSubtitles ainda serve legendas ISO-8859-1)
+    const buf = await res.arrayBuffer();
+    const contentType = res.headers.get("content-type") ?? "";
+    const charsetMatch = contentType.match(/charset=([^\s;]+)/i);
+    const rawCharset = charsetMatch?.[1]?.toLowerCase().replace(/^iso-8859-1$/, "windows-1252") ?? "utf-8";
+    let content: string;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      content = new TextDecoder(rawCharset as any).decode(buf);
+    } catch {
+      content = new TextDecoder("utf-8").decode(buf);
+    }
+    content = content.replace(/^﻿/, ""); // strip BOM
+
+    // I61: Usar hífen (padrão Jellyfin/Plex) em vez de underscore — "pt-BR" não "pt_BR"
     const ext = fileName?.endsWith(".ass") ? ".ass" : ".srt";
-    const langCode = language.replace("-", "_");
+    const langCode = language; // mantém "pt-BR" sem substituir "-" por "_"
     // Convenção Jellyfin: Video.pt-BR.srt ou Video.en.srt
     const srtPath = videoFilePath.replace(/\.(mkv|mp4|avi|m4v|webm)$/i, `.${langCode}${ext}`);
 

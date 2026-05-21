@@ -9,7 +9,7 @@
  *   <series_dir>/Season NN/episode.nfo — metadata do episódio (nome igual ao mkv)
  */
 
-import { writeFileSync, mkdirSync, existsSync, statSync, readdirSync } from "fs";
+import { writeFileSync, mkdirSync, existsSync, statSync, readdirSync, renameSync } from "fs";
 import { join, dirname, basename } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
@@ -74,7 +74,7 @@ type SeriesPathInput = {
   series_title?: string | null;
 };
 
-function resolveSeriesRootPath(anime: SeriesPathInput): string {
+export function resolveSeriesRootPath(anime: SeriesPathInput): string {
   // Usa media_path (destino final organizado) para que o NFO vá para a mesma pasta que o downloader
   const configDownloadPath = getConfigValue("media_path") || getConfigValue("download_path");
   const systemFallback = join(process.env.USERPROFILE ?? process.env.HOME ?? "~", "Anime");
@@ -208,6 +208,16 @@ function buildEpisodeNfo(ep: EpisodeRow, seriesTitle: string): string {
 </episodedetails>`;
 }
 
+function atomicWrite(destPath: string, data: string | Buffer, encoding?: BufferEncoding): void {
+  const tmp = destPath + ".tmp";
+  if (encoding) {
+    writeFileSync(tmp, data as string, encoding);
+  } else {
+    writeFileSync(tmp, data as Buffer);
+  }
+  renameSync(tmp, destPath);
+}
+
 /** Baixa uma imagem de URL para path local */
 async function downloadImage(url: string, destPath: string): Promise<boolean> {
   try {
@@ -215,7 +225,7 @@ async function downloadImage(url: string, destPath: string): Promise<boolean> {
     if (!res.ok) return false;
     const buf = await res.arrayBuffer();
     mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, Buffer.from(buf));
+    atomicWrite(destPath, Buffer.from(buf));
     logger.info("jellyfin", `Downloaded image → ${destPath}`);
     return true;
   } catch (err) {
@@ -264,7 +274,7 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
   // tvshow.nfo
   const tvshowNfoPath = join(serPath, "tvshow.nfo");
   const nfoContent = buildTvshowNfo(anime);
-  writeFileSync(tvshowNfoPath, nfoContent, "utf-8");
+  atomicWrite(tvshowNfoPath, nfoContent, "utf-8");
   result.tvshowNfo = tvshowNfoPath;
   logger.info("jellyfin", `tvshow.nfo → ${tvshowNfoPath}`);
 
@@ -306,7 +316,7 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
     // Garante que a pasta existe
     try {
       mkdirSync(dirname(nfoPath), { recursive: true });
-      writeFileSync(nfoPath, epNfoContent, "utf-8");
+      atomicWrite(nfoPath, epNfoContent, "utf-8");
       result.episodesNfo++;
     } catch (err) {
       result.errors.push(`ep${ep.number}: ${err}`);
@@ -411,7 +421,7 @@ export async function generateSingleEpisodeNfoAsync(
     const title = anime.title_english ?? anime.title;
     const nfoPath = resolveEpisodeNfoPath(filePath, episodeNumber, season);
     mkdirSync(dirname(nfoPath), { recursive: true });
-    writeFileSync(nfoPath, buildEpisodeNfo({ ...ep, file_path: filePath }, title), "utf-8");
+    atomicWrite(nfoPath, buildEpisodeNfo({ ...ep, file_path: filePath }, title), "utf-8");
     logger.info("jellyfin", `episode NFO → ${nfoPath}`);
 
     // 4. Cria tvshow.nfo na raiz da série se não existir
@@ -422,7 +432,7 @@ export async function generateSingleEpisodeNfoAsync(
 
     if (!existsSync(tvshowNfoPath)) {
       mkdirSync(serPath, { recursive: true });
-      writeFileSync(tvshowNfoPath, buildTvshowNfo(anime), "utf-8");
+      atomicWrite(tvshowNfoPath, buildTvshowNfo(anime), "utf-8");
       logger.info("jellyfin", `tvshow.nfo → ${tvshowNfoPath}`);
     }
 

@@ -344,13 +344,19 @@ export function TrackerHome() {
       });
       if (lib.reused) pushLog("library", `${selectedResult.title}: reutilizado registro existente`);
 
-      let queuedCount = 0;
-      for (const target of enqueueTargets.values()) {
-        const res = await enqueueEpisodes({ animeId: lib.id, episodes: [target.number], season: inferredSeason, sourceUrl: target.sourceUrl });
-        queuedCount += res.queued ?? 0;
+      // F15: usar allSettled para relatar parciais em vez de abortar no primeiro erro
+      const enqueueResults = await Promise.allSettled(
+        [...enqueueTargets.values()].map((target) =>
+          enqueueEpisodes({ animeId: lib.id, episodes: [target.number], season: inferredSeason, sourceUrl: target.sourceUrl })
+        )
+      );
+      const queuedCount = enqueueResults.reduce((sum, r) => sum + (r.status === "fulfilled" ? (r.value.queued ?? 0) : 0), 0);
+      const failedCount = enqueueResults.filter((r) => r.status === "rejected").length;
+      if (failedCount > 0) {
+        pushLog("queue", `${selectedResult.title}: ${queuedCount} enfileirados, ${failedCount} falharam`);
+      } else {
+        pushLog("queue", `${selectedResult.title}: ${queuedCount}/${enqueueTargets.size} eps enfileirados`);
       }
-
-      pushLog("queue", `${selectedResult.title}: ${queuedCount}/${enqueueTargets.size} eps enfileirados`);
       await refreshData();
       setMode("library");
     } catch (e) { pushLog("queue", `erro: ${(e as Error).message}`); }

@@ -23,6 +23,17 @@ const NO_RETRY_ERROR_CODES = new Set(["auth_error", "geo_blocked", "source_not_f
 
 function getFreeSpaceGb(path: string): number {
   try {
+    if (process.platform === "win32") {
+      const drive = path.match(/^([A-Za-z]:)/)?.[1] ?? "C:";
+      const result = Bun.spawnSync([
+        "wmic", "logicaldisk", "where", `deviceid='${drive}'`, "get", "freespace", "/value",
+      ]);
+      if (result.exitCode !== 0) return Infinity;
+      const out = new TextDecoder().decode(result.stdout);
+      const match = out.match(/FreeSpace=(\d+)/);
+      if (!match) return Infinity;
+      return Number(match[1]) / (1024 ** 3);
+    }
     const result = Bun.spawnSync(["df", "-k", "--output=avail", path]);
     if (result.exitCode !== 0) return Infinity;
     const lines = new TextDecoder().decode(result.stdout).trim().split("\n");
@@ -1172,7 +1183,11 @@ async function realDownload(
     type: "real",
     cancel: () => {
       try {
-        proc.kill();
+        if (process.platform === "win32") {
+          Bun.spawnSync(["taskkill", "/T", "/F", "/PID", String(proc.pid)]);
+        } else {
+          proc.kill();
+        }
       } catch {
         // noop
       }
@@ -1286,7 +1301,16 @@ async function realDownload(
 
   if (code === 0) {
     // yt-dlp pode salvar com extensão diferente de .mkv (.mp4, .ts, etc.)
-    const actualFilePath = findActualOutputFile(outputTemplate) ?? filePath;
+    const actualFilePath = findActualOutputFile(outputTemplate);
+    if (!actualFilePath) {
+      handleJobFailure(
+        jobId, animeId, episode, season,
+        "Arquivo de vídeo não encontrado após download (yt-dlp retornou exit 0 sem arquivo válido no disco).",
+        "file_not_found"
+      );
+      return;
+    }
+
     let diskSize = 0;
     try {
       diskSize = statSync(actualFilePath).size;
@@ -1639,9 +1663,9 @@ function inferEpisodeFromSourceUrl(sourceUrl?: string | null): number | null {
   return null;
 }
 
-export function enqueueDownloads(animeId: string, episodes: number[], season = 1, sourceUrl?: string): QueueJob[] {
+export function enqueueDownloads(animeId: string, episodes: number[], season = 1, sourceUrl?: string, providerOverride?: string): QueueJob[] {
   const quality = getConfig("quality") || "1080p";
-  const provider = getConfig("provider") || "animefire";
+  const provider = providerOverride || getConfig("provider") || "animefire";
   const maxAttempts = getConfigInt("retry_max_attempts", 3, 0, 20);
 
   const insert = db.prepare(`

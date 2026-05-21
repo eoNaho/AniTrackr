@@ -19,11 +19,14 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
   const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([]);
   const [streamState, setStreamState] = useState<StreamState>("connecting");
   const [lastStreamTs, setLastStreamTs] = useState<number | null>(null);
+  const [reconnectKey, setReconnectKey] = useState(0);
 
   const prevCompletedRef = useRef<Set<string>>(new Set());
   const prevFailedRef = useRef<Set<string>>(new Set());
   // Ref separada para evitar closure stale no stale-check interval
   const lastEventMsRef = useRef<number>(0);
+  const retryCountRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshDownloads = useCallback(async () => {
     try {
@@ -98,19 +101,29 @@ export function useDownloadStream(pushLog: (module: string, text: string) => voi
       (state) => {
         if (!mounted) return;
         if (state === "open") {
+          retryCountRef.current = 0;
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
           lastEventMsRef.current = Date.now();
           setStreamState("live");
         } else {
           setStreamState("fallback");
           pushLog("stream", "SSE desconectado — modo fallback ativo");
+          // F04: Agendar reconexão com backoff exponencial (3s, 6s, 12s … até 60s)
+          const delay = Math.min(3_000 * Math.pow(2, retryCountRef.current), 60_000);
+          retryCountRef.current++;
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = setTimeout(() => {
+            setReconnectKey((k) => k + 1);
+          }, delay);
         }
       }
     );
     return () => {
       mounted = false;
       close();
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     };
-  }, [pushLog, refreshDownloads]);
+  }, [pushLog, refreshDownloads, reconnectKey]);
 
   // ── Stale detection: SSE live mas sem eventos por STALE_MS → fallback ─────
   useEffect(() => {

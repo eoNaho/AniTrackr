@@ -162,10 +162,10 @@ export async function refreshLibrary(libraryId?: string): Promise<{ ok: boolean;
   }
 }
 
-export async function refreshSeries(seriesPath: string): Promise<{ ok: boolean; message: string }> {
-  if (!isEnabled()) return { ok: false, message: "Integração Jellyfin desabilitada" };
+export async function refreshSeries(seriesPath: string): Promise<{ ok: boolean; matched: boolean; message: string }> {
+  if (!isEnabled()) return { ok: false, matched: false, message: "Integração Jellyfin desabilitada" };
   const url = baseUrl();
-  if (!url) return { ok: false, message: "URL do servidor não configurada" };
+  if (!url) return { ok: false, matched: false, message: "URL do servidor não configurada" };
 
   try {
     const searchRes = await fetch(
@@ -184,16 +184,18 @@ export async function refreshSeries(seriesPath: string): Promise<{ ok: boolean; 
         if (refreshRes.ok || refreshRes.status === 204) {
           persistCfg("jellyfin_last_refresh_at", new Date().toISOString());
           logger.info("jellyfin_connector", `Series refresh triggered (path=${seriesPath})`);
-          return { ok: true, message: "Refresh da série disparado" };
+          return { ok: true, matched: true, message: "Refresh da série disparado" };
         }
       }
     }
 
-    // Fallback: refresh full library
-    return refreshLibrary();
+    // Série não encontrada no Jellyfin — fallback para biblioteca completa
+    logger.warn("jellyfin_connector", `Série não encontrada via path="${seriesPath}" — fallback para refresh completo da biblioteca`);
+    const libResult = await refreshLibrary();
+    return { ...libResult, matched: false };
   } catch (err) {
     logger.warn("jellyfin_connector", `refreshSeries failed: ${err}`);
-    return { ok: false, message: String(err).split("\n")[0] };
+    return { ok: false, matched: false, message: String(err).split("\n")[0] };
   }
 }
 
