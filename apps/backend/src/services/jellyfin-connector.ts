@@ -10,8 +10,12 @@ function isEnabled(): boolean {
 }
 
 function buildHeaders(): Record<string, string> {
+  const token = cfg("jellyfin_api_key");
   return {
-    "X-Emby-Authorization": `MediaBrowser Token="${cfg("jellyfin_api_key")}"`,
+    "X-Emby-Authorization": `MediaBrowser Token="${token}"`,
+    "X-Emby-Token": token,
+    "X-MediaBrowser-Token": token,
+    Accept: "application/json",
     "Content-Type": "application/json",
   };
 }
@@ -67,7 +71,7 @@ export async function testConnection(): Promise<JellyfinTestResult> {
   if (!cfg("jellyfin_api_key")) return { ok: false, connected: false, message: "API Key não configurada" };
 
   try {
-    const res = await fetch(`${url}/System/Info`, {
+    const res = await fetch(`${url}/Users`, {
       headers: buildHeaders(),
       signal: AbortSignal.timeout(timeout()),
     });
@@ -79,16 +83,31 @@ export async function testConnection(): Promise<JellyfinTestResult> {
       return { ok: false, connected: false, message: `Servidor retornou HTTP ${res.status}` };
     }
 
-    const data = await res.json() as { ServerName?: string; Version?: string };
+    const users = await res.json() as Array<{ Name?: string }>;
+    let serverName: string | undefined;
+    let version: string | undefined;
+    try {
+      const infoRes = await fetch(`${url}/System/Info`, {
+        headers: buildHeaders(),
+        signal: AbortSignal.timeout(timeout()),
+      });
+      if (infoRes.ok) {
+        const info = await infoRes.json() as { ServerName?: string; Version?: string };
+        serverName = info.ServerName;
+        version = info.Version;
+      }
+    } catch {
+      // noop
+    }
     persistCfg("jellyfin_last_test_at", new Date().toISOString());
     persistCfg("jellyfin_last_error", "");
-    logger.info("jellyfin_connector", `Conexão OK: ${data.ServerName} v${data.Version}`);
+    logger.info("jellyfin_connector", `Conexão OK: users=${users.length}${serverName ? `, ${serverName} v${version ?? "?"}` : ""}`);
 
     return {
       ok: true,
       connected: true,
-      serverName: data.ServerName,
-      version: data.Version,
+      serverName,
+      version,
       message: "Conexão validada com sucesso",
     };
   } catch (err) {
@@ -117,14 +136,15 @@ export async function getLibraries(): Promise<{ ok: boolean; libraries?: Jellyfi
       ItemId?: string; Id?: string; Name?: string; CollectionType?: string;
     }>;
 
-    return {
-      ok: true,
-      libraries: data.map((lib) => ({
+    const libraries = data
+      .map((lib) => ({
         id: lib.ItemId ?? lib.Id ?? "",
         name: lib.Name ?? "(sem nome)",
         collectionType: lib.CollectionType ?? "mixed",
-      })),
-    };
+      }))
+      .filter((lib) => lib.id);
+
+    return { ok: true, libraries };
   } catch (err) {
     logger.warn("jellyfin_connector", `getLibraries failed: ${err}`);
     return { ok: false, message: String(err).split("\n")[0] };
