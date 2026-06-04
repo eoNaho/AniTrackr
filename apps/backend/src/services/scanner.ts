@@ -8,6 +8,7 @@ import {
   parseEpisodeFromFilename,
   episodeFilenameWithTitle,
   sanitize,
+  isMovie,
 } from "./naming.ts";
 import { randomUUID } from "crypto";
 
@@ -70,10 +71,12 @@ function listVideoFiles(dirPath: string, depth = 0): LibraryFile[] {
 export async function scanAnime(animeId: string): Promise<ScanResult> {
   const anime = db.query<{
     id: string; title: string; title_english: string | null;
-    local_path: string; episode_count: number; season_number: number; year: number | null;
-  }, [string]>(`SELECT id, title, title_english, local_path, episode_count, season_number, year FROM animes WHERE id = ?`).get(animeId);
+    local_path: string; episode_count: number; season_number: number; year: number | null; subtype: string | null;
+  }, [string]>(`SELECT id, title, title_english, local_path, episode_count, season_number, year, subtype FROM animes WHERE id = ?`).get(animeId);
 
   if (!anime) throw new Error(`Anime ${animeId} não encontrado`);
+
+  const animeIsMovie = isMovie(anime.subtype);
 
   const localPath = anime.local_path;
   if (!localPath || !existsSync(localPath)) {
@@ -96,11 +99,23 @@ export async function scanAnime(animeId: string): Promise<ScanResult> {
       file_size_mb = excluded.file_size_mb
   `);
 
-  for (const file of files) {
-    if (file.episode == null) continue;
+  // Filmes não têm S##E## no nome — o maior arquivo de vídeo é tratado como "episódio 1".
+  const orderedFiles = animeIsMovie ? [...files].sort((a, b) => b.sizeMb - a.sizeMb) : files;
+  let movieAssigned = false;
+
+  for (const file of orderedFiles) {
+    let epNumber = file.episode;
+    let epSeason = file.season ?? anime.season_number;
+    if (epNumber == null && animeIsMovie && !movieAssigned) {
+      epNumber = 1;
+      epSeason = 1;
+      movieAssigned = true;
+    }
+    if (epNumber == null) continue;
+
     const existing = db.query<{ id: string }, [string, number, number]>(
       `SELECT id FROM episodes WHERE anime_id = ? AND number = ? AND season = ?`
-    ).get(animeId, file.episode, file.season ?? anime.season_number);
+    ).get(animeId, epNumber, epSeason);
 
     if (existing) {
       filesAlreadyTracked++;
@@ -111,8 +126,8 @@ export async function scanAnime(animeId: string): Promise<ScanResult> {
     upsertEp.run({
       $id: existing?.id ?? randomUUID(),
       $anime_id: animeId,
-      $number: file.episode,
-      $season: file.season ?? anime.season_number,
+      $number: epNumber,
+      $season: epSeason,
       $file_path: file.path,
       $file_size_mb: file.sizeMb,
     });

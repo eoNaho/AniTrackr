@@ -52,7 +52,7 @@ curl http://localhost:3001/api/v1/health
   "ok": true,
   "data": {
     "status": "ok",
-    "version": "2.1.1",
+    "version": "2.1.2",
     "timestamp": "2026-05-20T03:00:00.000Z",
     "scopes": ["search:read", "library:read", "downloads:read", "queue:write", "config:read", "admin"]
   }

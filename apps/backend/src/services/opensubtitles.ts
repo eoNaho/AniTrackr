@@ -14,7 +14,7 @@ import db from "../db/index.ts";
 
 const BASE = "https://api.opensubtitles.com/api/v1";
 const APP_NAME = "anitrackr";
-const APP_VERSION = "2.1.1";
+const APP_VERSION = "2.1.2";
 
 // Lê a chave do banco a cada chamada — permite configurar via Settings sem reiniciar
 function getOsConfig(): { apiKey: string; username: string; password: string } {

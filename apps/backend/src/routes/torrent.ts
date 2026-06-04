@@ -70,8 +70,9 @@ function normalizeCompletedTorrentPath(animeId: string, episode: number, season:
     title_romaji: string | null;
     year: number | null;
     series_title: string | null;
+    subtype: string | null;
   }, [string]>(
-    `SELECT title, title_english, title_romaji, year, series_title FROM animes WHERE id = ?`
+    `SELECT title, title_english, title_romaji, year, series_title, subtype FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return rawPath;
 
@@ -92,7 +93,7 @@ function normalizeCompletedTorrentPath(animeId: string, episode: number, season:
   const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
   const seasonPart = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji).seasonPart;
   const ext = extname(sourceMediaPath).replace(/^\./, "") || "mkv";
-  const targetPath = buildPath(scheme, basePath, title, anime.year, season, episode, null, ext, seasonPart);
+  const targetPath = buildPath(scheme, basePath, title, anime.year, season, episode, null, ext, seasonPart, anime.subtype);
 
   if (normalizePathForCompare(sourceMediaPath) === normalizePathForCompare(targetPath)) {
     return sourceMediaPath;

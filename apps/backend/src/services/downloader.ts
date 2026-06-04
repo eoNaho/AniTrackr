@@ -1013,8 +1013,9 @@ function simulateDownload(jobId: string, animeId: string, episode: number, seaso
     title_romaji: string | null;
     year: number | null;
     series_title: string | null;
+    subtype: string | null;
   }, [string]>(
-    `SELECT title, title_english, title_romaji, year, series_title FROM animes WHERE id = ?`
+    `SELECT title, title_english, title_romaji, year, series_title, subtype FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return;
 
@@ -1023,7 +1024,7 @@ function simulateDownload(jobId: string, animeId: string, episode: number, seaso
   // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
   const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
   const seasonPart = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji).seasonPart;
-  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null, "mkv", seasonPart);
+  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null, "mkv", seasonPart, anime.subtype);
 
   try {
     mkdirSync(dirname(filePath), { recursive: true });
@@ -1098,15 +1099,16 @@ async function realDownload(
     title_romaji: string | null;
     year: number | null;
     series_title: string | null;
+    subtype: string | null;
   }, [string]>(
-    `SELECT title, title_english, title_romaji, year, series_title FROM animes WHERE id = ?`
+    `SELECT title, title_english, title_romaji, year, series_title, subtype FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return;
 
   // series_title tem o nome base da série (sem sufixo de temporada), resolvido via AniList
   const title = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
   const seasonPart = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji).seasonPart;
-  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null, "mkv", seasonPart);
+  const filePath = buildPath(scheme, basePath, title, anime.year, season, episode, null, "mkv", seasonPart, anime.subtype);
 
   try {
     mkdirSync(dirname(filePath), { recursive: true });

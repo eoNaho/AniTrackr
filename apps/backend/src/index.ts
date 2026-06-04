@@ -157,7 +157,7 @@ startAutoScheduler();
 startRefreshQueue();
 
 logger.info("app", `╔══════════════════════════════════════════════════╗`);
-logger.info("app", `║  AniTrackr Backend v2.1.1                  ║`);
+logger.info("app", `║  AniTrackr Backend v2.1.2                  ║`);
 logger.info("app", `║  http://localhost:${PORT}                            ║`);
 logger.info("app", `╚══════════════════════════════════════════════════╝`);
 logger.info("app", `DB FILE: ${DB_FILE}`);

@@ -80,7 +80,7 @@ export function TrackerHome() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isBusy, setIsBusy] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([
-    { time: "00:00:00", module: "app", text: "Iniciando AniTrackr v2.1.1..." },
+    { time: "00:00:00", module: "app", text: "Iniciando AniTrackr v2.1.2..." },
   ]);
 
   const [downloadPath, setDownloadPath] = useState("");
@@ -403,7 +403,7 @@ export function TrackerHome() {
       <div className="flex h-full flex-col gap-2 rounded-md border border-[#45475a] bg-[#0f0f14] p-2 shadow-[0_20px_50px_rgba(0,0,0,.8),inset_0_0_100px_rgba(0,0,0,.5)]">
         <header className="flex shrink-0 flex-col gap-2 border-b border-[#2a2a38] pb-2 text-[13px]">
           <div className="font-extrabold tracking-[1px] text-[#cba6f7] drop-shadow-[0_0_4px_rgba(203,166,247,.35)]">
-            ANITRACKR-DOWNLOAD-TRACKER v2.1.1<span className="blink ml-1">_</span>
+            ANITRACKR-DOWNLOAD-TRACKER v2<span className="blink ml-1">_</span>
           </div>
 
           <nav className="order-3 flex gap-1 overflow-x-auto pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

@@ -16,6 +16,8 @@ permissions:
   contents: read
   packages: write
 
+# Nota: o job "release" eleva contents para write via permissão de job.
+
 jobs:
   # Detecta quais serviços mudaram para não rebuildar os dois desnecessariamente.
   # Em tags e workflow_dispatch sempre rebuilda tudo.
@@ -131,3 +133,22 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
           provenance: false
+
+  # Cria a GitHub Release que o updater (/update/check) consome.
+  # Só roda em push de tag v* e somente depois das imagens subirem com sucesso,
+  # para não publicar release apontando para imagens quebradas/inexistentes.
+  release:
+    needs: [backend, web]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true

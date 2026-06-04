@@ -13,7 +13,7 @@ import { writeFileSync, mkdirSync, existsSync, statSync, readdirSync, renameSync
 import { join, dirname, basename } from "path";
 import db from "../db/index.ts";
 import { logger } from "../utils/logger.ts";
-import { inferSeasonInfo, isSeasonDirectoryName, seasonDir, stripSeasonSuffix, sanitize } from "./naming.ts";
+import { inferSeasonInfo, isSeasonDirectoryName, seasonDir, stripSeasonSuffix, sanitize, isMovie, movieDir } from "./naming.ts";
 import { jikanGetEpisode } from "./jikan.ts";
 import { scanAnime } from "./scanner.ts";
 
@@ -72,6 +72,7 @@ type SeriesPathInput = {
   year: number | null;
   local_path: string;
   series_title?: string | null;
+  subtype?: string | null;
 };
 
 export function resolveSeriesRootPath(anime: SeriesPathInput): string {
@@ -85,6 +86,12 @@ export function resolveSeriesRootPath(anime: SeriesPathInput): string {
   const rawTitle = anime.series_title || anime.title_romaji || anime.title_english || anime.title;
   const baseTitle = stripSeasonSuffix(rawTitle);
   const expectedSeriesName = sanitize(baseTitle);
+
+  // Filmes vão para "Movies/Título (Ano)" — mesma pasta que buildPath/moviePath usa.
+  // A lógica de subir por "Season XX" abaixo não se aplica a filmes (pasta única).
+  if (isMovie(anime.subtype)) {
+    return join(baseDir, movieDir(baseTitle, anime.year));
+  }
 
   const rawPath = (anime.local_path ?? "").trim();
   if (!rawPath) {
@@ -194,6 +201,37 @@ ${tagXml}
 </tvshow>`;
 }
 
+/** Gera o movie.nfo no formato Jellyfin/Kodi (raiz <movie>) */
+function buildMovieNfo(anime: AnimeRow): string {
+  const title = anime.title_english ?? anime.title;
+  const genres = safeJson<string[]>(anime.genres, []);
+  const tags = safeJson<string[]>(anime.tags, []);
+
+  const genreXml = genres.map((g) => `  <genre>${xmlEscape(g)}</genre>`).join("\n");
+  const tagXml = tags
+    .slice(0, 8)
+    .map((t) => `  <tag>${xmlEscape(t)}</tag>`)
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>${xmlEscape(title)}</title>
+  <originaltitle>${xmlEscape(anime.title_romaji ?? anime.title)}</originaltitle>
+  <sorttitle>${xmlEscape(title)}</sorttitle>
+  <year>${anime.year ?? ""}</year>
+  <premiered>${anime.year ? `${anime.year}-01-01` : ""}</premiered>
+  <rating>${anime.rating ?? ""}</rating>
+  <plot>${xmlEscape(anime.synopsis)}</plot>
+  <runtime>${anime.episode_length ?? ""}</runtime>
+  <mpaa>TV-14</mpaa>
+${genreXml}
+${tagXml}
+  <uniqueid type="anilist" default="true">${anime.anilist_id ?? ""}</uniqueid>
+  <uniqueid type="myanimelist">${anime.mal_id ?? ""}</uniqueid>
+  <uniqueid type="kitsu">${anime.kitsu_id ?? ""}</uniqueid>
+</movie>`;
+}
+
 /** Gera o episodeXXXX.nfo */
 function buildEpisodeNfo(ep: EpisodeRow, seriesTitle: string): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -270,6 +308,24 @@ export async function generateNfo(animeId: string, downloadImages = true): Promi
   const serPath = resolveSeriesRootPath(anime);
 
   mkdirSync(serPath, { recursive: true });
+
+  // Filmes: gera movie.nfo na pasta do filme + posters, sem episode/season NFO.
+  if (isMovie(anime.subtype)) {
+    const movieNfoPath = join(serPath, "movie.nfo");
+    atomicWrite(movieNfoPath, buildMovieNfo(anime), "utf-8");
+    result.tvshowNfo = movieNfoPath;
+    logger.info("jellyfin", `movie.nfo → ${movieNfoPath}`);
+
+    if (downloadImages) {
+      if (anime.poster_url) {
+        result.posterDownloaded = await downloadImage(anime.poster_url, join(serPath, "poster.jpg"));
+      }
+      if (anime.cover_url) {
+        result.fanartDownloaded = await downloadImage(anime.cover_url, join(serPath, "fanart.jpg"));
+      }
+    }
+    return result;
+  }
 
   // tvshow.nfo
   const tvshowNfoPath = join(serPath, "tvshow.nfo");
@@ -376,6 +432,23 @@ export async function generateSingleEpisodeNfoAsync(
   try {
     const anime = db.query<AnimeRow, [string]>(`SELECT * FROM animes WHERE id = ?`).get(animeId);
     if (!anime) return;
+
+    // Filmes: o arquivo já está em "Movies/Título (Ano)/Título (Ano).mkv".
+    // Gera movie.nfo (raiz <movie>) e posters na própria pasta do filme.
+    if (isMovie(anime.subtype)) {
+      const movieDirPath = dirname(filePath);
+      mkdirSync(movieDirPath, { recursive: true });
+      atomicWrite(join(movieDirPath, "movie.nfo"), buildMovieNfo(anime), "utf-8");
+      logger.info("jellyfin", `movie.nfo → ${join(movieDirPath, "movie.nfo")}`);
+      if (anime.poster_url && !existsSync(join(movieDirPath, "poster.jpg"))) {
+        void downloadImage(anime.poster_url, join(movieDirPath, "poster.jpg"));
+      }
+      if (anime.cover_url && !existsSync(join(movieDirPath, "fanart.jpg"))) {
+        void downloadImage(anime.cover_url, join(movieDirPath, "fanart.jpg"));
+      }
+      return;
+    }
+
     const seasonInfo = inferSeasonInfo(anime.title, anime.title_english, anime.title_romaji);
 
     // 1. Carrega episódio do banco
@@ -457,8 +530,8 @@ export async function generateSingleEpisodeNfoAsync(
 
 /** Baixa poster e fanart para um anime sem gerar NFO */
 export async function downloadPosters(animeId: string): Promise<{ poster: boolean; fanart: boolean }> {
-  const anime = db.query<{ poster_url: string | null; cover_url: string | null; local_path: string; title: string; title_english: string | null; title_romaji: string | null; year: number | null }, [string]>(
-    `SELECT poster_url, cover_url, local_path, title, title_english, title_romaji, year FROM animes WHERE id = ?`
+  const anime = db.query<{ poster_url: string | null; cover_url: string | null; local_path: string; title: string; title_english: string | null; title_romaji: string | null; year: number | null; subtype: string | null }, [string]>(
+    `SELECT poster_url, cover_url, local_path, title, title_english, title_romaji, year, subtype FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) throw new Error(`Anime ${animeId} não encontrado`);
 
@@ -468,6 +541,7 @@ export async function downloadPosters(animeId: string): Promise<{ poster: boolea
     title_romaji: anime.title_romaji,
     year: anime.year,
     local_path: anime.local_path,
+    subtype: anime.subtype,
   });
 
   mkdirSync(serPath, { recursive: true });

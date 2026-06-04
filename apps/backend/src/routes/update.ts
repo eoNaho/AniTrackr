@@ -2,7 +2,7 @@ import Elysia from "elysia";
 import { existsSync } from "fs";
 import { logger } from "../utils/logger.ts";
 
-export const CURRENT_VERSION = "2.1.1";
+export const CURRENT_VERSION = "2.1.2";
 const GITHUB_REPO = "eonaho/goanime-trackear";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
 

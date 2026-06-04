@@ -6,6 +6,7 @@ import { logger } from "../utils/logger.ts";
 import db from "../db/index.ts";
 import { existsSync, readdirSync, statSync, readFileSync } from "fs";
 import { join } from "path";
+import { isMovie } from "../services/naming.ts";
 
 function jsonError(message: string, status = 500) {
   return new Response(JSON.stringify({ error: message }), {
@@ -35,7 +36,7 @@ function isValidNfo(nfoPath: string): boolean {
     const stat = statSync(nfoPath);
     if (stat.size === 0) return false;
     const content = readFileSync(nfoPath, "utf-8");
-    return content.includes("<tvshow>") || content.includes("<episodedetails>");
+    return content.includes("<tvshow>") || content.includes("<episodedetails>") || content.includes("<movie>");
   } catch {
     return false;
   }
@@ -44,15 +45,16 @@ function isValidNfo(nfoPath: string): boolean {
 function checkAnimeReadiness(animeId: string): AnimeReadiness | null {
   const anime = db.query<{
     id: string; title: string; title_english: string | null; title_romaji: string | null;
-    local_path: string; year: number | null; series_title: string | null;
+    local_path: string; year: number | null; series_title: string | null; subtype: string | null;
   }, [string]>(
-    `SELECT id, title, title_english, title_romaji, local_path, year, series_title FROM animes WHERE id = ?`
+    `SELECT id, title, title_english, title_romaji, local_path, year, series_title, subtype FROM animes WHERE id = ?`
   ).get(animeId);
   if (!anime) return null;
 
-  // Usa o mesmo resolveSeriesRootPath que generateNfo usa — garante consistência de path
+  // Usa o mesmo resolveSeriesRootPath que generateNfo usa — garante consistência de path.
+  // Filmes usam movie.nfo (raiz <movie>); séries usam tvshow.nfo.
   const serPath = resolveSeriesRootPath(anime);
-  const nfoPath = join(serPath, "tvshow.nfo");
+  const nfoPath = join(serPath, isMovie(anime.subtype) ? "movie.nfo" : "tvshow.nfo");
   const hasTvshowNfo = existsSync(nfoPath) && isValidNfo(nfoPath);
   const hasPoster = existsSync(join(serPath, "poster.jpg"));
   const hasFanart = existsSync(join(serPath, "fanart.jpg"));
@@ -61,10 +63,13 @@ function checkAnimeReadiness(animeId: string): AnimeReadiness | null {
     `SELECT file_path FROM episodes WHERE anime_id = ? AND file_path IS NOT NULL AND file_path != ''`
   ).all(animeId);
 
+  // Filmes não têm episode.nfo individual — o movie.nfo (verificado acima) cobre o filme.
   let episodesMissingNfo = 0;
-  for (const ep of episodes) {
-    const nfoPath = ep.file_path.replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo");
-    if (!existsSync(nfoPath)) episodesMissingNfo++;
+  if (!isMovie(anime.subtype)) {
+    for (const ep of episodes) {
+      const nfoPath = ep.file_path.replace(/\.(mkv|mp4|avi|m4v|webm)$/i, ".nfo");
+      if (!existsSync(nfoPath)) episodesMissingNfo++;
+    }
   }
 
   return {

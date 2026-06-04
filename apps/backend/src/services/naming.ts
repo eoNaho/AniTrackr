@@ -285,6 +285,14 @@ export function moviePath(
   return join(basePath, movieDir(title, year), movieFilename(title, year, ext));
 }
 
+/**
+ * Detecta se um anime é, na verdade, um filme.
+ * Aceita os valores de subtype do Kitsu ("movie") e o format do AniList ("MOVIE").
+ */
+export function isMovie(subtype?: string | null): boolean {
+  return (subtype ?? "").trim().toLowerCase() === "movie";
+}
+
 /** Detecta se um filename já está no formato Jellyfin S##E## */
 export function isJellyfinNamed(filename: string): boolean {
   return /S\d{1,3}E\d{1,4}/i.test(filename);
@@ -371,10 +379,17 @@ export function buildPath(
   episode: number,
   episodeTitle?: string | null,
   ext = "mkv",
-  seasonPart?: number | null
+  seasonPart?: number | null,
+  subtype?: string | null
 ): string {
   // Título base sem sufixo de temporada: todas as temporadas ficam na mesma pasta
   const baseTitle = stripSeasonSuffix(title);
+
+  // Filmes não têm temporada/episódio: vão para "Movies/Título (Ano)/Título (Ano).ext",
+  // independentemente do scheme (convenção padrão Jellyfin/Plex para filmes).
+  if (isMovie(subtype)) {
+    return moviePath(basePath, baseTitle, year, ext);
+  }
 
   switch (scheme) {
     case "simple":
